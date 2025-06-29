@@ -1,30 +1,53 @@
 package model
 
+// Fingerprint holds clues about the device's identity.
+type Fingerprint struct {
+	Vendor          string // From the MAC address (e.g., "Apple, Inc.")
+	OperatingSystem string // From Nmap's OS detection (e.g., "Windows 10")
+	DeviceType      string // From Nmap's OS detection (e.g., "general purpose", "media device")
+}
+
+// GeoInfo will store geolocation data for an IP address.
+type GeoInfo struct {
+	Country string
+	City    string
+	ISP     string
+}
+
+// WifiInfo holds all 802.11-specific data for a host.
+type WifiInfo struct {
+	DeviceRole    string
+	AssociatedAP  string
+	SSID          string
+	ProbeRequests map[string]bool
+	HasHandshake  bool
+}
+
 // Communication represents a single interaction between our host and another IP.
 type Communication struct {
 	CounterpartIP string
 	PacketCount   int
-	Protocols     map[string]int // Track different protocols used in the conversation
+	Protocols     map[string]int
+	Geo           *GeoInfo
 }
 
 // NetworkMap is the top-level structure holding all network information.
 type NetworkMap struct {
-	// The map key is now the host's MAC address (if available) or its IP address.
-	// This allows us to track a physical device even if its IP changes.
 	Hosts map[string]*Host
 }
 
 // Host represents a single device on the network.
 type Host struct {
-	// A host can now have multiple IPs associated with it over time.
-	IPv4Addresses  map[string]bool // Using a map as a set for quick lookups
-	IPv6Address    string
+	IPv4Addresses  map[string]bool
 	MACAddress     string
 	Status         string
 	Hostnames      []string
-	Ports          map[int]Port // Map of PortID to Port to avoid duplicate ports
+	Ports          map[int]Port
 	Communications map[string]*Communication
 	DiscoveredBy   string
+	Wifi           *WifiInfo
+	// Add the new Fingerprint struct to our Host
+	Fingerprint *Fingerprint
 }
 
 // Port represents a network port on a host.
@@ -36,7 +59,6 @@ type Port struct {
 	Version  string
 }
 
-// Helper function to create a new, empty NetworkMap
 func NewNetworkMap() *NetworkMap {
 	return &NetworkMap{
 		Hosts: make(map[string]*Host),
