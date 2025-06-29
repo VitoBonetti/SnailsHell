@@ -11,15 +11,15 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-// EnrichWithPcapData now calls our new behavioral analysis function.
-func EnrichWithPcapData(filename string, networkMap *model.NetworkMap) error {
+// EnrichData now takes both the host map and the global summary.
+func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.PcapSummary) error {
 	handle, err := pcap.OpenOffline(filename)
 	if err != nil {
 		return err
 	}
 	defer handle.Close()
 
-	fmt.Printf("  -> Enriching with deep packet analysis from %s...\n", filename)
+	fmt.Printf("  -> Performing full pcap analysis on %s...\n", filename)
 
 	ipToHostKey := make(map[string]string)
 	for key, host := range networkMap.Hosts {
@@ -30,15 +30,47 @@ func EnrichWithPcapData(filename string, networkMap *model.NetworkMap) error {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for packet := range packetSource.Packets() {
-		processIPCommunication(packet, networkMap, ipToHostKey)
-		processWifiFrames(packet, networkMap)
-		processBehavioralAnalysis(packet, networkMap, ipToHostKey)
+		// Update the global summary with data from every packet
+		updateGlobalSummary(packet, summary, networkMap)
+
+		// Enrich known hosts (these functions now only do host-specific work)
+		enrichHostIPData(packet, networkMap, ipToHostKey)
+		enrichHostWifiData(packet, networkMap)
+		enrichHostBehavior(packet, networkMap, ipToHostKey)
 	}
 	return nil
 }
 
-// processBehavioralAnalysis inspects traffic for clues
-func processBehavioralAnalysis(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
+// --- NEW: updateGlobalSummary populates our new summary struct ---
+func updateGlobalSummary(packet gopacket.Packet, summary *model.PcapSummary, networkMap *model.NetworkMap) {
+	// 1. Log all protocols
+	for _, layer := range packet.Layers() {
+		protocolName := layer.LayerType().String()
+		summary.ProtocolCounts[protocolName]++
+	}
+
+	// 2. Find unidentified MACs and global probe requests
+	if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
+		dot11, _ := dot11Layer.(*layers.Dot11)
+
+		// Check Address 2 (Transmitter) as it's almost always present and is the source
+		sourceMAC := strings.ToUpper(dot11.Address2.String())
+		if _, known := networkMap.Hosts[sourceMAC]; !known && sourceMAC != "00:00:00:00:00:00" {
+			summary.UnidentifiedMACs[sourceMAC] = true
+		}
+
+		// Check for probe requests from any device
+		if dot11.Type == layers.Dot11TypeMgmtProbeReq {
+			if ssid, err := getSSIDFromDot11(dot11); err == nil && ssid != "" && ssid != "<hidden or broadcast>" {
+				summary.AllProbeRequests[ssid] = true
+			}
+		}
+	}
+}
+
+// --- The following functions are now just for enriching known hosts ---
+
+func enrichHostIPData(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
 	ipLayer := packet.Layer(layers.LayerTypeIPv4)
 	if ipLayer == nil {
 		return
@@ -49,65 +81,16 @@ func processBehavioralAnalysis(packet gopacket.Packet, networkMap *model.Network
 		return
 	}
 	host := networkMap.Hosts[sourceKey]
-
-	if host.Fingerprint == nil {
-		return
-	}
-
-	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
-		udp, _ := udpLayer.(*layers.UDP)
-		switch udp.DstPort {
-		case 1900:
-			host.Fingerprint.BehavioralClues["Likely Media Device (SSDP/UPnP traffic)"] = true
-		case 5353:
-			// --- THE IMPROVEMENT IS HERE ---
-			// This new description is more accurate and less brand-specific.
-			host.Fingerprint.BehavioralClues["Service Discovery traffic detected (mDNS/Bonjour)"] = true
-		}
-	}
-
-	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
-		tcp, _ := tcpLayer.(*layers.TCP)
-		switch tcp.DstPort {
-		case 445:
-			host.Fingerprint.BehavioralClues["Windows File Sharing or NAS detected (SMB traffic)"] = true
-		}
-	}
-}
-
-// Renamed from processIPCommunication for clarity
-func processIPCommunication(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
-	ipLayer := packet.Layer(layers.LayerTypeIPv4)
-	if ipLayer == nil {
-		return
-	}
-	ip, _ := ipLayer.(*layers.IPv4)
-
-	srcIP := ip.SrcIP.String()
-	dstIP := ip.DstIP.String()
-
-	sourceKey, found := ipToKey[srcIP]
-	if !found {
-		return
-	}
-	host := networkMap.Hosts[sourceKey]
-
-	comm, ok := host.Communications[dstIP]
+	comm, ok := host.Communications[ip.DstIP.String()]
 	if !ok {
-		comm = &model.Communication{
-			CounterpartIP: dstIP,
-			PacketCount:   0,
-			Protocols:     make(map[string]int),
-		}
-		host.Communications[dstIP] = comm
+		comm = &model.Communication{CounterpartIP: ip.DstIP.String(), PacketCount: 0, Protocols: make(map[string]int)}
+		host.Communications[ip.DstIP.String()] = comm
 	}
 	comm.PacketCount++
 	comm.Protocols[ip.Protocol.String()]++
 }
 
-// Renamed from a mix of functions to one clear function
-func processWifiFrames(packet gopacket.Packet, networkMap *model.NetworkMap) {
-	// Wi-Fi Frame Analysis
+func enrichHostWifiData(packet gopacket.Packet, networkMap *model.NetworkMap) {
 	if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
 		dot11, _ := dot11Layer.(*layers.Dot11)
 		key := strings.ToUpper(dot11.Address2.String())
@@ -132,7 +115,6 @@ func processWifiFrames(packet gopacket.Packet, networkMap *model.NetworkMap) {
 			}
 		}
 	}
-	// Handshake Detection
 	if eapolLayer := packet.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
 		if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
 			dot11, _ := dot11Layer.(*layers.Dot11)
@@ -150,6 +132,37 @@ func processWifiFrames(packet gopacket.Packet, networkMap *model.NetworkMap) {
 				}
 				host.Wifi.HasHandshake = true
 			}
+		}
+	}
+}
+
+func enrichHostBehavior(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
+	ipLayer := packet.Layer(layers.LayerTypeIPv4)
+	if ipLayer == nil {
+		return
+	}
+	ip, _ := ipLayer.(*layers.IPv4)
+	sourceKey, found := ipToKey[ip.SrcIP.String()]
+	if !found {
+		return
+	}
+	host := networkMap.Hosts[sourceKey]
+	if host.Fingerprint == nil {
+		return
+	}
+	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
+		udp, _ := udpLayer.(*layers.UDP)
+		if udp.DstPort == 1900 {
+			host.Fingerprint.BehavioralClues["Likely Media Device (SSDP/UPnP traffic)"] = true
+		}
+		if udp.DstPort == 5353 {
+			host.Fingerprint.BehavioralClues["Service Discovery traffic detected (mDNS/Bonjour)"] = true
+		}
+	}
+	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+		tcp, _ := tcpLayer.(*layers.TCP)
+		if tcp.DstPort == 445 {
+			host.Fingerprint.BehavioralClues["Windows File Sharing or NAS detected (SMB traffic)"] = true
 		}
 	}
 }

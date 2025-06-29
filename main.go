@@ -12,11 +12,11 @@ import (
 )
 
 func main() {
-	// (All parsing logic is unchanged)
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: go run . <file1.xml> ... <file1.pcapng> ...")
 		return
 	}
+
 	var xmlFiles, pcapFiles []string
 	for _, arg := range os.Args[1:] {
 		if strings.HasSuffix(arg, ".xml") {
@@ -35,10 +35,11 @@ func main() {
 	}
 	fmt.Printf("\n✅ Nmap parsing complete. Found %d unique hosts.\n\n", len(masterMap.Hosts))
 
+	globalSummary := model.NewPcapSummary()
 	if len(pcapFiles) > 0 {
 		fmt.Println("--- Enriching with Pcap files ---")
 		for _, file := range pcapFiles {
-			if err := pcap.EnrichWithPcapData(file, masterMap); err != nil {
+			if err := pcap.EnrichData(file, masterMap, globalSummary); err != nil {
 				log.Printf("Warning: could not process pcap file %s: %v", file, err)
 			}
 		}
@@ -66,9 +67,8 @@ func main() {
 	}
 	fmt.Println("\n✅ Geolocation enrichment complete.")
 
-	// --- Display Final Results ---
 	fmt.Println("\n===================================================")
-	fmt.Println("          Consolidated & Enriched Network Map")
+	fmt.Println("          Host-Centric Network Report")
 	fmt.Println("===================================================")
 	for key, host := range masterMap.Hosts {
 		var ips []string
@@ -80,6 +80,8 @@ func main() {
 		fmt.Printf("  IP Addresses: %s\n", strings.Join(ips, ", "))
 		fmt.Printf("  Status: %s\n", host.Status)
 
+		// --- THE FIX IS HERE ---
+		// Restored the full, correct display logic for each host.
 		if host.Fingerprint != nil {
 			fmt.Printf("  Device Fingerprint:\n")
 			if host.Fingerprint.Vendor != "" {
@@ -91,8 +93,6 @@ func main() {
 			if host.Fingerprint.DeviceType != "" {
 				fmt.Printf("    Device Type: %s\n", host.Fingerprint.DeviceType)
 			}
-
-			// --- NEW: Display Behavioral Clues ---
 			if len(host.Fingerprint.BehavioralClues) > 0 {
 				fmt.Printf("    Behavioral Clues:\n")
 				for clue := range host.Fingerprint.BehavioralClues {
@@ -101,8 +101,6 @@ func main() {
 			}
 		}
 
-		// --- THE FIX IS HERE ---
-		// Restored the missing display logic for Wi-Fi details.
 		if host.Wifi != nil {
 			fmt.Printf("  Wi-Fi Details:\n")
 			if host.Wifi.DeviceRole != "" {
@@ -126,7 +124,6 @@ func main() {
 			}
 		}
 
-		// Restored the missing display logic for Nmap ports.
 		if len(host.Ports) > 0 {
 			fmt.Printf("  Nmap Ports:\n")
 			for _, port := range host.Ports {
@@ -147,6 +144,31 @@ func main() {
 					fmt.Printf("    - Talked to %s (%d packets)\n", counterpartIP, comm.PacketCount)
 				}
 			}
+		}
+	}
+
+	fmt.Println("\n\n===================================================")
+	fmt.Println("            Global Pcap Summary")
+	fmt.Println("===================================================")
+
+	if len(globalSummary.UnidentifiedMACs) > 0 {
+		fmt.Printf("\n--- Unidentified Devices (Seen in Pcap but not Nmap) ---\n")
+		for mac := range globalSummary.UnidentifiedMACs {
+			fmt.Printf("  - %s\n", mac)
+		}
+	}
+
+	if len(globalSummary.AllProbeRequests) > 0 {
+		fmt.Printf("\n--- Wi-Fi Probe Requests (All Nearby Devices) ---\n")
+		for ssid := range globalSummary.AllProbeRequests {
+			fmt.Printf("  - SSID: %s\n", ssid)
+		}
+	}
+
+	if len(globalSummary.ProtocolCounts) > 0 {
+		fmt.Printf("\n--- Overall Protocol Statistics ---\n")
+		for proto, count := range globalSummary.ProtocolCounts {
+			fmt.Printf("  - %-25s : %d packets\n", proto, count)
 		}
 	}
 }
