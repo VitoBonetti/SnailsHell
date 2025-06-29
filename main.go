@@ -169,6 +169,23 @@ func main() {
 				fmt.Printf("    - Port %d/%s (%s): %s\n", port.ID, port.Protocol, port.State, versionInfo)
 			}
 		}
+		// --- NEW: Display Vulnerabilities Found ---
+		if len(host.Vulnerabilities) > 0 {
+			fmt.Printf("  Vulnerabilities Found:\n")
+			for _, vuln := range host.Vulnerabilities {
+				// Customize the display based on what information we found
+				if vuln.PortID != 0 {
+					fmt.Printf("    - Port %d: [%s] %s\n", vuln.PortID, vuln.State, vuln.CVE)
+				} else {
+					fmt.Printf("    - Host-Level: [%s] %s\n", vuln.State, vuln.CVE)
+				}
+				// Print the description indented for readability
+				if vuln.Description != "" {
+					fmt.Printf("        Description: %s\n", vuln.Description)
+				}
+			}
+		}
+
 		if len(host.Communications) > 0 {
 			fmt.Printf("  Pcap Communications:\n")
 			for counterpartIP, comm := range host.Communications {

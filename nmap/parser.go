@@ -9,6 +9,19 @@ import (
 )
 
 // (All XML parsing structs remain unchanged)
+type Script struct {
+	ID     string  `xml:"id,attr"`
+	Output string  `xml:"output,attr"`
+	Tables []Table `xml:"table"`
+}
+type Table struct {
+	Elements []Elem `xml:"elem"`
+}
+type Elem struct {
+	Key   string `xml:"key,attr"`
+	Value string `xml:",chardata"`
+}
+
 type Os struct {
 	OsMatches []OsMatch `xml:"osmatch"`
 }
@@ -28,11 +41,12 @@ type NmapRun struct {
 	Hosts   []Host   `xml:"host"`
 }
 type Host struct {
-	Status    Status     `xml:"status"`
-	Addresses []Address  `xml:"address"`
-	Hostnames []Hostname `xml:"hostnames>hostname"`
-	Ports     []Port     `xml:"ports>port"`
-	Os        Os         `xml:"os"`
+	Status      Status     `xml:"status"`
+	Addresses   []Address  `xml:"address"`
+	Hostnames   []Hostname `xml:"hostnames>hostname"`
+	Ports       []Port     `xml:"ports>port"`
+	Os          Os         `xml:"os"`
+	HostScripts []Script   `xml:"hostscript>script"`
 }
 type Address struct {
 	Addr     string `xml:"addr,attr"`
@@ -43,10 +57,11 @@ type Hostname struct {
 	Name string `xml:"name,attr"`
 }
 type Port struct {
-	Protocol string  `xml:"protocol,attr"`
-	PortID   int     `xml:"portid,attr"`
-	State    State   `xml:"state"`
-	Service  Service `xml:"service"`
+	Protocol string   `xml:"protocol,attr"`
+	PortID   int      `xml:"portid,attr"`
+	State    State    `xml:"state"`
+	Service  Service  `xml:"service"`
+	Scripts  []Script `xml:"script"`
 }
 type State struct {
 	State string `xml:"state,attr"`
@@ -141,6 +156,53 @@ func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 				}
 			}
 		}
+
+		// --- NEW: Parse Port-Level Vulnerabilities ---
+		for _, nmapPort := range nmapHost.Ports {
+			for _, script := range nmapPort.Scripts {
+				// We're interested in any script with "vuln" in its name
+				if strings.Contains(script.ID, "vuln") {
+					vuln := parseVulnerabilityFromScript(script, nmapPort.PortID)
+					existingHost.Vulnerabilities = append(existingHost.Vulnerabilities, vuln)
+				}
+			}
+		}
+
+		// --- NEW: Parse Host-Level Vulnerabilities ---
+		for _, script := range nmapHost.HostScripts {
+			if strings.Contains(script.ID, "vuln") {
+				// PortID is 0 to signify a host-level finding
+				vuln := parseVulnerabilityFromScript(script, 0)
+				existingHost.Vulnerabilities = append(existingHost.Vulnerabilities, vuln)
+			}
+		}
 	}
 	return nil
+}
+
+// --- NEW: Helper function to parse a script into our Vulnerability model ---
+func parseVulnerabilityFromScript(script Script, portID int) model.Vulnerability {
+	vuln := model.Vulnerability{
+		PortID:      portID,
+		Description: strings.TrimSpace(script.Output),
+	}
+
+	// Try to find structured data like CVE and State
+	for _, table := range script.Tables {
+		for _, elem := range table.Elements {
+			if elem.Key == "id" {
+				vuln.CVE = elem.Value
+			}
+			if elem.Key == "state" {
+				vuln.State = elem.Value
+			}
+		}
+	}
+
+	// If no structured CVE was found, use the script ID as a fallback
+	if vuln.CVE == "" {
+		vuln.CVE = script.ID
+	}
+
+	return vuln
 }
