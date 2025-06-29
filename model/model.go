@@ -2,9 +2,11 @@ package model
 
 // Fingerprint holds clues about the device's identity.
 type Fingerprint struct {
-	Vendor          string // From the MAC address (e.g., "Apple, Inc.")
-	OperatingSystem string // From Nmap's OS detection (e.g., "Windows 10")
-	DeviceType      string // From Nmap's OS detection (e.g., "general purpose", "media device")
+	Vendor          string
+	OperatingSystem string
+	DeviceType      string
+	// Add a map to store unique behavioral clues.
+	BehavioralClues map[string]bool
 }
 
 // GeoInfo will store geolocation data for an IP address.
@@ -46,8 +48,7 @@ type Host struct {
 	Communications map[string]*Communication
 	DiscoveredBy   string
 	Wifi           *WifiInfo
-	// Add the new Fingerprint struct to our Host
-	Fingerprint *Fingerprint
+	Fingerprint    *Fingerprint
 }
 
 // Port represents a network port on a host.

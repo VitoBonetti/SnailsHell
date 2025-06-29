@@ -12,12 +12,11 @@ import (
 )
 
 func main() {
+	// (All parsing logic is unchanged)
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: go run . <file1.xml> ... <file1.pcapng> ...")
 		return
 	}
-
-	// (File sorting and parsing logic is unchanged)
 	var xmlFiles, pcapFiles []string
 	for _, arg := range os.Args[1:] {
 		if strings.HasSuffix(arg, ".xml") {
@@ -67,7 +66,7 @@ func main() {
 	}
 	fmt.Println("\n✅ Geolocation enrichment complete.")
 
-	// --- 5. Display Final Results ---
+	// --- Display Final Results ---
 	fmt.Println("\n===================================================")
 	fmt.Println("          Consolidated & Enriched Network Map")
 	fmt.Println("===================================================")
@@ -81,7 +80,6 @@ func main() {
 		fmt.Printf("  IP Addresses: %s\n", strings.Join(ips, ", "))
 		fmt.Printf("  Status: %s\n", host.Status)
 
-		// --- NEW: Display Fingerprint Info ---
 		if host.Fingerprint != nil {
 			fmt.Printf("  Device Fingerprint:\n")
 			if host.Fingerprint.Vendor != "" {
@@ -92,6 +90,14 @@ func main() {
 			}
 			if host.Fingerprint.DeviceType != "" {
 				fmt.Printf("    Device Type: %s\n", host.Fingerprint.DeviceType)
+			}
+
+			// --- NEW: Display Behavioral Clues ---
+			if len(host.Fingerprint.BehavioralClues) > 0 {
+				fmt.Printf("    Behavioral Clues:\n")
+				for clue := range host.Fingerprint.BehavioralClues {
+					fmt.Printf("      - %s\n", clue)
+				}
 			}
 		}
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// --- NEW: Add structs for OS Detection ---
+// (All XML parsing structs remain unchanged)
 type Os struct {
 	OsMatches []OsMatch `xml:"osmatch"`
 }
@@ -22,10 +22,7 @@ type OsClass struct {
 	Vendor   string `xml:"vendor,attr"`
 	OsFamily string `xml:"osfamily,attr"`
 	OsGen    string `xml:"osgen,attr"`
-	Accuracy string `xml:"accuracy,attr"`
 }
-
-// (Existing XML parsing structs)
 type NmapRun struct {
 	XMLName xml.Name `xml:"nmaprun"`
 	Hosts   []Host   `xml:"host"`
@@ -35,17 +32,13 @@ type Host struct {
 	Addresses []Address  `xml:"address"`
 	Hostnames []Hostname `xml:"hostnames>hostname"`
 	Ports     []Port     `xml:"ports>port"`
-	// Add the Os struct to our Host parser
-	Os Os `xml:"os"`
+	Os        Os         `xml:"os"`
 }
 type Address struct {
 	Addr     string `xml:"addr,attr"`
 	AddrType string `xml:"addrtype,attr"`
-	// Nmap provides the vendor for MAC addresses
-	Vendor string `xml:"vendor,attr"`
+	Vendor   string `xml:"vendor,attr"`
 }
-
-// (Other structs remain unchanged)
 type Hostname struct {
 	Name string `xml:"name,attr"`
 }
@@ -67,7 +60,7 @@ type Status struct {
 	State string `xml:"state,attr"`
 }
 
-// MergeFromFile now extracts OS and Vendor data.
+// MergeFromFile now initializes the BehavioralClues map.
 func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 	xmlFile, err := ioutil.ReadFile(filename)
 	if err != nil {
@@ -86,9 +79,9 @@ func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 		for _, addr := range nmapHost.Addresses {
 			if addr.AddrType == "ipv4" {
 				currentIP = addr.Addr
-			} else if addr.AddrType == "mac" {
+			}
+			if addr.AddrType == "mac" {
 				currentMAC = strings.ToUpper(addr.Addr)
-				// Capture the vendor if Nmap provides it
 				if addr.Vendor != "" {
 					vendor = addr.Vendor
 				}
@@ -110,27 +103,26 @@ func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 				IPv4Addresses:  make(map[string]bool),
 				Ports:          make(map[int]model.Port),
 				Communications: make(map[string]*model.Communication),
-				Fingerprint:    &model.Fingerprint{}, // Initialize the fingerprint struct
 				DiscoveredBy:   "Nmap",
 			}
 			networkMap.Hosts[key] = existingHost
 		}
 
 		if existingHost.Fingerprint == nil {
-			existingHost.Fingerprint = &model.Fingerprint{}
+			// --- THE FIX IS HERE ---
+			// Initialize the fingerprint along with the behavioral clues map
+			existingHost.Fingerprint = &model.Fingerprint{
+				BehavioralClues: make(map[string]bool),
+			}
 		}
 
-		// Update Fingerprint with Vendor
 		if vendor != "" {
 			existingHost.Fingerprint.Vendor = vendor
 		}
 
-		// --- NEW: Update Fingerprint with OS Details ---
-		// We'll take the first, most accurate OS match from Nmap
 		if len(nmapHost.Os.OsMatches) > 0 {
 			bestMatch := nmapHost.Os.OsMatches[0]
 			existingHost.Fingerprint.OperatingSystem = bestMatch.Name
-
 			if len(bestMatch.OsClasses) > 0 {
 				existingHost.Fingerprint.DeviceType = bestMatch.OsClasses[0].Type
 			}
@@ -144,11 +136,8 @@ func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 		for _, nmapPort := range nmapHost.Ports {
 			if _, portExists := existingHost.Ports[nmapPort.PortID]; !portExists {
 				existingHost.Ports[nmapPort.PortID] = model.Port{
-					ID:       nmapPort.PortID,
-					Protocol: nmapPort.Protocol,
-					State:    nmapPort.State.State,
-					Service:  nmapPort.Service.Name,
-					Version:  nmapPort.Service.Product + " " + nmapPort.Service.Version,
+					ID: nmapPort.PortID, Protocol: nmapPort.Protocol, State: nmapPort.State.State,
+					Service: nmapPort.Service.Name, Version: nmapPort.Service.Product + " " + nmapPort.Service.Version,
 				}
 			}
 		}
