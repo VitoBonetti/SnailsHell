@@ -11,7 +11,7 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-// EnrichData now takes both the host map and the global summary.
+// (The main EnrichData function is unchanged)
 func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.PcapSummary) error {
 	handle, err := pcap.OpenOffline(filename)
 	if err != nil {
@@ -30,10 +30,7 @@ func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.Pc
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for packet := range packetSource.Packets() {
-		// Update the global summary with data from every packet
 		updateGlobalSummary(packet, summary, networkMap)
-
-		// Enrich known hosts (these functions now only do host-specific work)
 		enrichHostIPData(packet, networkMap, ipToHostKey)
 		enrichHostWifiData(packet, networkMap)
 		enrichHostBehavior(packet, networkMap, ipToHostKey)
@@ -41,28 +38,40 @@ func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.Pc
 	return nil
 }
 
-// --- NEW: updateGlobalSummary populates our new summary struct ---
 func updateGlobalSummary(packet gopacket.Packet, summary *model.PcapSummary, networkMap *model.NetworkMap) {
-	// 1. Log all protocols
 	for _, layer := range packet.Layers() {
-		protocolName := layer.LayerType().String()
-		summary.ProtocolCounts[protocolName]++
+		summary.ProtocolCounts[layer.LayerType().String()]++
 	}
 
-	// 2. Find unidentified MACs and global probe requests
 	if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
 		dot11, _ := dot11Layer.(*layers.Dot11)
-
-		// Check Address 2 (Transmitter) as it's almost always present and is the source
 		sourceMAC := strings.ToUpper(dot11.Address2.String())
-		if _, known := networkMap.Hosts[sourceMAC]; !known && sourceMAC != "00:00:00:00:00:00" {
-			summary.UnidentifiedMACs[sourceMAC] = true
+
+		if _, known := networkMap.Hosts[sourceMAC]; !known && sourceMAC != "00:00:00:00:00:00" && sourceMAC != "" {
+			if _, exists := summary.UnidentifiedMACs[sourceMAC]; !exists {
+				summary.UnidentifiedMACs[sourceMAC] = ""
+			}
 		}
 
-		// Check for probe requests from any device
+		// --- BEACON FRAME LOGIC (THE FIX IS HERE) ---
+		if dot11.Type == layers.Dot11TypeMgmtBeacon {
+			if ssid, err := getSSIDFromDot11(dot11); err == nil && ssid != "" && ssid != "<hidden or broadcast>" {
+				// Check if the SSID key exists in the outer map
+				if _, ok := summary.AdvertisedAPs[ssid]; !ok {
+					// If not, create the inner map (the set of MACs)
+					summary.AdvertisedAPs[ssid] = make(map[string]bool)
+				}
+				// Add the AP's MAC address to the set for this SSID
+				summary.AdvertisedAPs[ssid][sourceMAC] = true
+			}
+		}
+
 		if dot11.Type == layers.Dot11TypeMgmtProbeReq {
 			if ssid, err := getSSIDFromDot11(dot11); err == nil && ssid != "" && ssid != "<hidden or broadcast>" {
-				summary.AllProbeRequests[ssid] = true
+				if _, ok := summary.AllProbeRequests[ssid]; !ok {
+					summary.AllProbeRequests[ssid] = make(map[string]bool)
+				}
+				summary.AllProbeRequests[ssid][sourceMAC] = true
 			}
 		}
 	}

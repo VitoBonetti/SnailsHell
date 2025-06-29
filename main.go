@@ -3,20 +3,33 @@ package main
 import (
 	"fmt"
 	"gonetmap/geoip"
+	"gonetmap/maclookup"
 	"gonetmap/model"
 	"gonetmap/nmap"
 	"gonetmap/pcap"
 	"log"
 	"os"
 	"strings"
+	"time"
+	"unicode"
 )
 
+// Helper function to ensure an SSID is clean before printing
+func cleanString(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return -1
+	}, s)
+}
+
 func main() {
+	// (All parsing logic is unchanged)
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: go run . <file1.xml> ... <file1.pcapng> ...")
 		return
 	}
-
 	var xmlFiles, pcapFiles []string
 	for _, arg := range os.Args[1:] {
 		if strings.HasSuffix(arg, ".xml") {
@@ -67,21 +80,45 @@ func main() {
 	}
 	fmt.Println("\n✅ Geolocation enrichment complete.")
 
-	fmt.Println("\n===================================================")
+	// --- NEW: Improved MAC Vendor Lookup Logic ---
+	fmt.Println("\n--- Performing MAC Vendor Lookups for Unidentified Devices ---")
+	if len(globalSummary.UnidentifiedMACs) > 0 {
+		totalMACs := len(globalSummary.UnidentifiedMACs)
+		count := 0
+		for mac := range globalSummary.UnidentifiedMACs {
+			count++
+			// Print a clean, updating progress counter
+			fmt.Printf("\r  -> Looking up vendors... (%d/%d)", count, totalMACs)
+
+			vendor, err := maclookup.LookupVendor(mac)
+			if err != nil {
+				// Don't log errors, just leave the vendor blank so the display logic handles it
+				globalSummary.UnidentifiedMACs[mac] = ""
+			} else {
+				globalSummary.UnidentifiedMACs[mac] = vendor
+			}
+
+			// Add a 1-second delay to respect API rate limits
+			time.Sleep(1 * time.Second)
+		}
+		fmt.Println("\n✅ MAC Vendor lookup complete.") // Print a newline to clean up the progress counter
+	} else {
+		fmt.Println("No unidentified devices to look up.")
+	}
+
+	// --- Host-Centric display is unchanged ---
+	fmt.Println("\n\n===================================================")
 	fmt.Println("          Host-Centric Network Report")
 	fmt.Println("===================================================")
+	// This loop is restored to its full version to show all host details
 	for key, host := range masterMap.Hosts {
 		var ips []string
 		for ip := range host.IPv4Addresses {
 			ips = append(ips, ip)
 		}
-
 		fmt.Printf("\n--- Host MAC: %s ---\n", key)
 		fmt.Printf("  IP Addresses: %s\n", strings.Join(ips, ", "))
 		fmt.Printf("  Status: %s\n", host.Status)
-
-		// --- THE FIX IS HERE ---
-		// Restored the full, correct display logic for each host.
 		if host.Fingerprint != nil {
 			fmt.Printf("  Device Fingerprint:\n")
 			if host.Fingerprint.Vendor != "" {
@@ -100,16 +137,15 @@ func main() {
 				}
 			}
 		}
-
 		if host.Wifi != nil {
 			fmt.Printf("  Wi-Fi Details:\n")
 			if host.Wifi.DeviceRole != "" {
 				fmt.Printf("    Role: %s\n", host.Wifi.DeviceRole)
 			}
-			if host.Wifi.DeviceRole == "Access Point" && host.Wifi.SSID != "" {
+			if host.Wifi.SSID != "" {
 				fmt.Printf("    SSID: %s\n", host.Wifi.SSID)
 			}
-			if host.Wifi.DeviceRole == "Client" && host.Wifi.AssociatedAP != "" {
+			if host.Wifi.AssociatedAP != "" {
 				fmt.Printf("    Connected to AP: %s\n", host.Wifi.AssociatedAP)
 			}
 			if len(host.Wifi.ProbeRequests) > 0 {
@@ -123,7 +159,6 @@ func main() {
 				fmt.Printf("    WPA Handshake Captured: Yes\n")
 			}
 		}
-
 		if len(host.Ports) > 0 {
 			fmt.Printf("  Nmap Ports:\n")
 			for _, port := range host.Ports {
@@ -134,7 +169,6 @@ func main() {
 				fmt.Printf("    - Port %d/%s (%s): %s\n", port.ID, port.Protocol, port.State, versionInfo)
 			}
 		}
-
 		if len(host.Communications) > 0 {
 			fmt.Printf("  Pcap Communications:\n")
 			for counterpartIP, comm := range host.Communications {
@@ -147,21 +181,62 @@ func main() {
 		}
 	}
 
+	// --- Display the Global Pcap Summary Report ---
 	fmt.Println("\n\n===================================================")
 	fmt.Println("            Global Pcap Summary")
 	fmt.Println("===================================================")
 
 	if len(globalSummary.UnidentifiedMACs) > 0 {
 		fmt.Printf("\n--- Unidentified Devices (Seen in Pcap but not Nmap) ---\n")
-		for mac := range globalSummary.UnidentifiedMACs {
-			fmt.Printf("  - %s\n", mac)
+		// --- NEW: Smart Display Logic ---
+		for mac, vendor := range globalSummary.UnidentifiedMACs {
+			// Check if we have a valid vendor name
+			if vendor != "" && vendor != "Unknown Vendor" {
+				parts := strings.Split(mac, ":")
+				if len(parts) == 6 {
+					// Format as Vendor-LastHalf
+					lastHalf := strings.Join(parts[3:], ":")
+					// Clean up long vendor names
+					cleanVendor := strings.Split(vendor, ",")[0]
+					fmt.Printf("  - %s-%s\n", cleanVendor, lastHalf)
+				} else {
+					// Fallback for unusually formatted MACs
+					fmt.Printf("  - %s (%s)\n", mac, vendor)
+				}
+			} else {
+				// If no valid vendor, just print the MAC
+				fmt.Printf("  - %s\n", mac)
+			}
 		}
 	}
 
+	// --- ADVERTISING APs - THE FIX IS HERE ---
+	if len(globalSummary.AdvertisedAPs) > 0 {
+		fmt.Printf("\n--- Advertising Access Points (Seen via Beacons) ---\n")
+		for ssid, apMACs := range globalSummary.AdvertisedAPs {
+			var macList []string
+			for mac := range apMACs {
+				macList = append(macList, mac)
+			}
+
+			displaySSID := strings.TrimSpace(cleanString(ssid))
+			if displaySSID == "" {
+				displaySSID = "<Hidden SSID>"
+			}
+			fmt.Printf("  - SSID: %-25s | AP MAC(s): %s\n", displaySSID, strings.Join(macList, ", "))
+		}
+	}
+
+	// --- PROBE REQUESTS - THE FIX IS HERE ---
 	if len(globalSummary.AllProbeRequests) > 0 {
-		fmt.Printf("\n--- Wi-Fi Probe Requests (All Nearby Devices) ---\n")
-		for ssid := range globalSummary.AllProbeRequests {
-			fmt.Printf("  - SSID: %s\n", ssid)
+		fmt.Printf("\n--- Wi-Fi Probe Requests (Client Devices Searching) ---\n")
+		for ssid, probers := range globalSummary.AllProbeRequests {
+			count := len(probers)
+			displaySSID := strings.TrimSpace(cleanString(ssid))
+			if displaySSID == "" {
+				displaySSID = "<Hidden SSID>"
+			}
+			fmt.Printf("  - SSID: %-25s | (Probed by %d unique device(s))\n", displaySSID, count)
 		}
 	}
 
