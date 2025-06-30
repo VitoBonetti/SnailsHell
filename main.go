@@ -2,11 +2,8 @@ package main
 
 import (
 	"fmt"
-	"gonetmap/geoip"
-	"gonetmap/maclookup"
+	"gonetmap/functions"
 	"gonetmap/model"
-	"gonetmap/nmap"
-	"gonetmap/pcap"
 	"log"
 	"os"
 	"sort"
@@ -28,7 +25,7 @@ func cleanString(s string) string {
 }
 
 func main() {
-	if err := maclookup.Init(); err != nil {
+	if err := functions.Init(); err != nil {
 		log.Fatalf("FATAL: Could not initialize MAC lookup database. Exiting. Error: %v", err)
 	}
 
@@ -50,7 +47,7 @@ func main() {
 	masterMap := model.NewNetworkMap()
 	fmt.Println("--- Parsing Nmap files ---")
 	for _, file := range xmlFiles {
-		if err := nmap.MergeFromFile(file, masterMap); err != nil {
+		if err := functions.MergeFromFile(file, masterMap); err != nil {
 			log.Printf("Warning: could not parse Nmap file %s: %v", file, err)
 		}
 	}
@@ -63,7 +60,7 @@ func main() {
 	if len(pcapFiles) > 0 {
 		fmt.Println("--- Enriching with Pcap files ---")
 		for _, file := range pcapFiles {
-			if err := pcap.EnrichData(file, masterMap, globalSummary, eapolTracker, packetSources); err != nil {
+			if err := functions.EnrichData(file, masterMap, globalSummary, eapolTracker, packetSources); err != nil {
 				log.Printf("Warning: could not process pcap file %s: %v", file, err)
 			}
 		}
@@ -81,7 +78,7 @@ func main() {
 				comm.Geo = geoInfo
 				continue
 			}
-			geoInfo, err := geoip.LookupIP(comm.CounterpartIP)
+			geoInfo, err := functions.LookupIP(comm.CounterpartIP)
 			if err != nil {
 				log.Printf("Could not get geo info for %s: %v", comm.CounterpartIP, err)
 			}
@@ -112,7 +109,7 @@ func main() {
 	if len(allMacsToLookup) > 0 {
 		fmt.Printf("  -> Found %d unique MACs to look up.\n", len(allMacsToLookup))
 		for mac := range allMacsToLookup {
-			vendor, err := maclookup.LookupVendor(mac)
+			vendor, err := functions.LookupVendor(mac)
 			if err == nil && vendor != "Unknown Vendor" {
 				allMacsToLookup[mac] = vendor
 			}

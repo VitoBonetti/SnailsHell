@@ -1,4 +1,4 @@
-package nmap
+package functions
 
 import (
 	"encoding/xml"

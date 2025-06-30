@@ -1,4 +1,4 @@
-package maclookup
+package functions
 
 import (
 	"fmt"
