@@ -1,5 +1,21 @@
 package model
 
+import "encoding/hex"
+
+// --- NEW: Handshake struct to hold crackable data ---
+type Handshake struct {
+	ClientMAC string
+	APMAC     string
+	SSID      string
+	PcapFile  string // The file where the handshake was found
+	HCCAPX    []byte // The handshake data in hccapx format
+}
+
+// ToHCCAPXString converts the binary hccapx data to a hex string for easy display.
+func (h *Handshake) ToHCCAPXString() string {
+	return hex.EncodeToString(h.HCCAPX)
+}
+
 // --- NEW: Define categories for our findings ---
 type FindingCategory string
 
@@ -20,10 +36,11 @@ type Vulnerability struct {
 
 // PcapSummary holds global data from all pcap files.
 type PcapSummary struct {
-	UnidentifiedMACs map[string]string
-	AllProbeRequests map[string]map[string]bool
-	AdvertisedAPs    map[string]map[string]bool
-	ProtocolCounts   map[string]int
+	UnidentifiedMACs   map[string]string
+	AllProbeRequests   map[string]map[string]bool
+	AdvertisedAPs      map[string]map[string]bool
+	ProtocolCounts     map[string]int
+	CapturedHandshakes []Handshake
 }
 
 // (All other structs remain unchanged)
@@ -39,11 +56,11 @@ type GeoInfo struct {
 	ISP     string
 }
 type WifiInfo struct {
-	DeviceRole    string
-	AssociatedAP  string
-	SSID          string
-	ProbeRequests map[string]bool
-	HasHandshake  bool
+	DeviceRole     string
+	AssociatedAP   string
+	SSID           string
+	ProbeRequests  map[string]bool
+	HandshakeState string
 }
 type Communication struct {
 	CounterpartIP string
@@ -82,9 +99,10 @@ func NewNetworkMap() *NetworkMap {
 // Update the helper to initialize the new and modified fields.
 func NewPcapSummary() *PcapSummary {
 	return &PcapSummary{
-		UnidentifiedMACs: make(map[string]string),
-		AllProbeRequests: make(map[string]map[string]bool),
-		AdvertisedAPs:    make(map[string]map[string]bool),
-		ProtocolCounts:   make(map[string]int),
+		UnidentifiedMACs:   make(map[string]string),
+		AllProbeRequests:   make(map[string]map[string]bool),
+		AdvertisedAPs:      make(map[string]map[string]bool),
+		ProtocolCounts:     make(map[string]int),
+		CapturedHandshakes: make([]Handshake, 0),
 	}
 }

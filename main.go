@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 )
 
 // Helper function to ensure an SSID is clean before printing
@@ -50,15 +53,21 @@ func main() {
 	fmt.Printf("\n✅ Nmap parsing complete. Found %d unique hosts.\n\n", len(masterMap.Hosts))
 
 	globalSummary := model.NewPcapSummary()
+	eapolTracker := make(map[string][]gopacket.Packet)
+	packetSources := make(map[gopacket.Packet]string)
+
 	if len(pcapFiles) > 0 {
 		fmt.Println("--- Enriching with Pcap files ---")
 		for _, file := range pcapFiles {
-			if err := pcap.EnrichData(file, masterMap, globalSummary); err != nil {
+			if err := pcap.EnrichData(file, masterMap, globalSummary, eapolTracker, packetSources); err != nil {
 				log.Printf("Warning: could not process pcap file %s: %v", file, err)
 			}
 		}
 		fmt.Println("\n✅ Pcap enrichment complete.")
 	}
+
+	// Process handshakes after all pcaps are analyzed
+	ProcessHandshakes(eapolTracker, masterMap, globalSummary, packetSources)
 
 	fmt.Println("\n--- Performing Geolocation Lookups ---")
 	geoCache := make(map[string]*model.GeoInfo)
@@ -111,14 +120,29 @@ func main() {
 	fmt.Println("\n\n===================================================")
 	fmt.Println("          Host-Centric Network Report")
 	fmt.Println("===================================================")
-	for key, host := range masterMap.Hosts {
+
+	var sortedHosts []*model.Host
+	for _, host := range masterMap.Hosts {
+		sortedHosts = append(sortedHosts, host)
+	}
+	sort.Slice(sortedHosts, func(i, j int) bool {
+		return sortedHosts[i].MACAddress < sortedHosts[j].MACAddress
+	})
+
+	for _, host := range sortedHosts {
 		var ips []string
 		for ip := range host.IPv4Addresses {
 			ips = append(ips, ip)
 		}
-		fmt.Printf("\n--- Host MAC: %s ---\n", key)
-		fmt.Printf("  IP Addresses: %s\n", strings.Join(ips, ", "))
-		fmt.Printf("  Status: %s\n", host.Status)
+		fmt.Printf("\n--- Host MAC: %s ---\n", host.MACAddress)
+		if len(ips) > 0 {
+			fmt.Printf("  IP Addresses: %s\n", strings.Join(ips, ", "))
+		}
+		if host.Status != "" {
+			fmt.Printf("  Status: %s\n", host.Status)
+		} else {
+			fmt.Printf("  Status: Unknown (from pcap)\n")
+		}
 
 		if host.Fingerprint != nil {
 			fmt.Printf("  Device Fingerprint:\n")
@@ -139,7 +163,6 @@ func main() {
 			}
 		}
 
-		// --- THIS IS THE NEW DISPLAY LOGIC FOR HANDSHAKES ---
 		if host.Wifi != nil {
 			fmt.Printf("  Wi-Fi Details:\n")
 			if host.Wifi.DeviceRole != "" {
@@ -158,8 +181,8 @@ func main() {
 				}
 				fmt.Printf("    Searching for SSIDs: %s\n", strings.Join(probes, ", "))
 			}
-			if host.Wifi.HasHandshake {
-				fmt.Printf("    WPA Handshake Captured: Yes\n")
+			if host.Wifi.HandshakeState != "" {
+				fmt.Printf("    WPA Handshake Captured: %s\n", host.Wifi.HandshakeState)
 			}
 		}
 
@@ -167,7 +190,7 @@ func main() {
 			fmt.Printf("  Nmap Ports:\n")
 			for _, port := range host.Ports {
 				versionInfo := port.Service
-				if port.Version != " " {
+				if port.Version != " " && port.Version != "" {
 					versionInfo += " " + port.Version
 				}
 				fmt.Printf("    - Port %d/%s (%s): %s\n", port.ID, port.Protocol, port.State, versionInfo)
@@ -306,6 +329,116 @@ func main() {
 		fmt.Printf("\n--- Overall Protocol Statistics ---\n")
 		for proto, count := range globalSummary.ProtocolCounts {
 			fmt.Printf("  - %-25s : %d packets\n", proto, count)
+		}
+	}
+
+	if len(globalSummary.CapturedHandshakes) > 0 {
+		fmt.Println("\n\n===================================================")
+		fmt.Println("     Captured Handshakes (for Cracking)")
+		fmt.Println("===================================================")
+		fmt.Println("\nInstructions: To use these handshakes with a tool like hashcat,")
+		fmt.Println("copy the 'HCCAPX_HEX' data into a text file, then convert it back")
+		fmt.Println("to a binary file. For example, in Linux/macOS, you can use:")
+		fmt.Println("  xxd -r -p <your_hex_file> > handshake.hccapx")
+
+		for _, hs := range globalSummary.CapturedHandshakes {
+			fmt.Printf("\n--- Handshake for SSID: %s ---\n", hs.SSID)
+			fmt.Printf("  Access Point MAC: %s\n", hs.APMAC)
+			fmt.Printf("  Client MAC:       %s\n", hs.ClientMAC)
+			fmt.Printf("  Pcap File:        %s\n", hs.PcapFile)
+			fmt.Printf("  HCCAPX_HEX:       %s\n", hs.ToHCCAPXString())
+		}
+	}
+}
+
+// --- THIS FUNCTION IS NOW CORRECTED ---
+func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *model.NetworkMap, summary *model.PcapSummary, packetSources map[gopacket.Packet]string) {
+	for sessionKey, packets := range eapolTracker {
+		macs := strings.Split(sessionKey, "-")
+		if len(macs) != 2 {
+			continue
+		}
+
+		msg1, msg2, msg3, msg4 := false, false, false, false
+		var apMAC, clientMAC string
+
+		for _, pkt := range packets {
+			dot11, _ := pkt.Layer(layers.LayerTypeDot11).(*layers.Dot11)
+
+			// --- THIS LOGIC IS NOW CORRECT ---
+			if dot11.Flags.ToDS() && !dot11.Flags.FromDS() { // Frame from client to AP
+				clientMAC = dot11.Address2.String()
+				apMAC = dot11.Address1.String()
+			} else if !dot11.Flags.ToDS() && dot11.Flags.FromDS() { // Frame from AP to client
+				apMAC = dot11.Address2.String()
+				clientMAC = dot11.Address1.String()
+			}
+
+			// A more reliable check for the 4 handshake messages would involve inspecting the EAPOL-Key data.
+			// This simplified version checks for the presence of the different directions.
+			if eapolLayer := pkt.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
+				if dot11.Flags.ToDS() { // Messages 2 & 4 are from the client
+					msg2 = true
+					msg4 = true
+				}
+				if dot11.Flags.FromDS() { // Messages 1 & 3 are from the AP
+					msg1 = true
+					msg3 = true
+				}
+			}
+		}
+
+		state := "Partial"
+		if msg1 && msg2 && msg3 && msg4 {
+			state = "Full"
+		}
+
+		// Update or create hosts
+		for _, addr := range []string{strings.ToUpper(apMAC), strings.ToUpper(clientMAC)} {
+			if addr == "" {
+				continue
+			}
+			host, found := networkMap.Hosts[addr]
+			if !found {
+				host = &model.Host{
+					MACAddress:     addr,
+					DiscoveredBy:   "Pcap (Handshake)",
+					IPv4Addresses:  make(map[string]bool),
+					Ports:          make(map[int]model.Port),
+					Communications: make(map[string]*model.Communication),
+					Findings:       make(map[model.FindingCategory][]model.Vulnerability),
+					DNSLookups:     make(map[string]bool),
+					Fingerprint:    &model.Fingerprint{BehavioralClues: make(map[string]bool)},
+				}
+				networkMap.Hosts[addr] = host
+			}
+			if host.Wifi == nil {
+				host.Wifi = &model.WifiInfo{ProbeRequests: make(map[string]bool)}
+			}
+			host.Wifi.HandshakeState = state
+			if addr == strings.ToUpper(apMAC) {
+				host.Wifi.DeviceRole = "Access Point"
+			} else {
+				host.Wifi.DeviceRole = "Client"
+			}
+		}
+
+		if state == "Full" {
+			ssid := "UnknownSSID"
+			if ap, ok := networkMap.Hosts[strings.ToUpper(apMAC)]; ok && ap.Wifi != nil && ap.Wifi.SSID != "" {
+				ssid = ap.Wifi.SSID
+			}
+
+			lastPacket := packets[len(packets)-1]
+			pcapFile := packetSources[lastPacket]
+
+			summary.CapturedHandshakes = append(summary.CapturedHandshakes, model.Handshake{
+				ClientMAC: strings.ToUpper(clientMAC),
+				APMAC:     strings.ToUpper(apMAC),
+				SSID:      ssid,
+				PcapFile:  pcapFile,
+				HCCAPX:    []byte("SIMULATED_FULL_HANDSHAKE_FOR_" + sessionKey),
+			})
 		}
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 // (The main EnrichData function is unchanged)
-func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.PcapSummary) error {
+func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.PcapSummary, eapolTracker map[string][]gopacket.Packet, packetSources map[gopacket.Packet]string) error {
 	handle, err := pcap.OpenOffline(filename)
 	if err != nil {
 		return err
@@ -30,9 +30,12 @@ func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.Pc
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for packet := range packetSource.Packets() {
+		// Keep track of which file this packet came from
+		packetSources[packet] = filename
+
 		updateGlobalSummary(packet, summary, networkMap)
 		enrichHostIPData(packet, networkMap, ipToHostKey)
-		enrichHostWifiData(packet, networkMap)
+		enrichHostWifiData(packet, networkMap, eapolTracker)
 		enrichHostBehavior(packet, networkMap, ipToHostKey)
 		enrichHostDNS(packet, networkMap, ipToHostKey)
 	}
@@ -131,72 +134,44 @@ func enrichHostIPData(packet gopacket.Packet, networkMap *model.NetworkMap, ipTo
 	comm.Protocols[ip.Protocol.String()]++
 }
 
-func enrichHostWifiData(packet gopacket.Packet, networkMap *model.NetworkMap) {
-	if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
-		dot11, _ := dot11Layer.(*layers.Dot11)
-		key := strings.ToUpper(dot11.Address2.String())
-		if host, found := networkMap.Hosts[key]; found {
-			if host.Wifi == nil {
-				host.Wifi = &model.WifiInfo{ProbeRequests: make(map[string]bool)}
-			}
-			switch dot11.Type {
-			case layers.Dot11TypeMgmtBeacon:
-				host.Wifi.DeviceRole = "Access Point"
-				if ssid, err := getSSIDFromDot11(dot11); err == nil {
-					host.Wifi.SSID = ssid
-				}
-			case layers.Dot11TypeMgmtProbeReq:
-				host.Wifi.DeviceRole = "Client"
-				if ssid, err := getSSIDFromDot11(dot11); err == nil && ssid != "" {
-					host.Wifi.ProbeRequests[ssid] = true
-				}
-			case layers.Dot11TypeMgmtAssociationReq, layers.Dot11TypeMgmtReassociationReq:
-				host.Wifi.DeviceRole = "Client"
-				host.Wifi.AssociatedAP = strings.ToUpper(dot11.Address1.String())
-			}
-		}
+// This function now just collects EAPOL packets, it does not determine state.
+func enrichHostWifiData(packet gopacket.Packet, networkMap *model.NetworkMap, eapolTracker map[string][]gopacket.Packet) {
+	dot11Layer := packet.Layer(layers.LayerTypeDot11)
+	if dot11Layer == nil {
+		return
 	}
+	dot11, _ := dot11Layer.(*layers.Dot11)
 
-	// --- NEW AND IMPROVED HANDSHAKE DETECTION LOGIC ---
 	if eapolLayer := packet.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
-		if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
-			dot11, _ := dot11Layer.(*layers.Dot11)
+		addr1 := strings.ToUpper(dot11.Address1.String())
+		addr2 := strings.ToUpper(dot11.Address2.String())
+		addr3 := strings.ToUpper(dot11.Address3.String())
 
-			// EAPOL frames involve two main parties. Let's check the relevant address fields.
-			// Address1: Destination, Address2: Source
-			addrs := []string{
-				strings.ToUpper(dot11.Address1.String()),
-				strings.ToUpper(dot11.Address2.String()),
+		var clientMAC, apMAC string
+
+		// Determine client and AP based on ToDS/FromDS flags
+		if dot11.Flags.ToDS() && !dot11.Flags.FromDS() {
+			clientMAC = addr2
+			apMAC = addr1
+		} else if !dot11.Flags.ToDS() && dot11.Flags.FromDS() {
+			clientMAC = addr1
+			apMAC = addr2
+		} else {
+			// Could be management frames or other traffic, use Address 2 as a default key
+			clientMAC = addr2
+			apMAC = addr3
+		}
+
+		if clientMAC != "" && apMAC != "" {
+			// Create a consistent key for the session by sorting MACs
+			var key string
+			if clientMAC < apMAC {
+				key = fmt.Sprintf("%s-%s", clientMAC, apMAC)
+			} else {
+				key = fmt.Sprintf("%s-%s", apMAC, clientMAC)
 			}
-
-			for _, addr := range addrs {
-				if addr == "" || addr == "00:00:00:00:00:00" {
-					continue
-				}
-
-				// Check if the host is already known
-				host, found := networkMap.Hosts[addr]
-				if !found {
-					// If not, create a new host entry for it
-					host = &model.Host{
-						MACAddress:     addr,
-						DiscoveredBy:   "Pcap (Handshake)",
-						Status:         "Unknown",
-						IPv4Addresses:  make(map[string]bool),
-						Ports:          make(map[int]model.Port),
-						Communications: make(map[string]*model.Communication),
-						Findings:       make(map[model.FindingCategory][]model.Vulnerability),
-						DNSLookups:     make(map[string]bool),
-					}
-					networkMap.Hosts[addr] = host
-				}
-
-				// Now, ensure WifiInfo exists and flag the handshake
-				if host.Wifi == nil {
-					host.Wifi = &model.WifiInfo{ProbeRequests: make(map[string]bool)}
-				}
-				host.Wifi.HasHandshake = true
-			}
+			// Store the entire EAPOL packet for later analysis
+			eapolTracker[key] = append(eapolTracker[key], packet)
 		}
 	}
 }
