@@ -11,7 +11,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/google/gopacket"
@@ -29,11 +28,16 @@ func cleanString(s string) string {
 }
 
 func main() {
+	if err := maclookup.Init(); err != nil {
+		log.Fatalf("FATAL: Could not initialize MAC lookup database. Exiting. Error: %v", err)
+	}
+
 	// (All parsing logic is unchanged)
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: go run . <file1.xml> ... <file1.pcapng> ...")
 		return
 	}
+
 	var xmlFiles, pcapFiles []string
 	for _, arg := range os.Args[1:] {
 		if strings.HasSuffix(arg, ".xml") {
@@ -90,30 +94,48 @@ func main() {
 	}
 	fmt.Println("\n✅ Geolocation enrichment complete.")
 
-	// --- NEW: Improved MAC Vendor Lookup Logic ---
-	fmt.Println("\n--- Performing MAC Vendor Lookups for Unidentified Devices ---")
-	if len(globalSummary.UnidentifiedMACs) > 0 {
-		totalMACs := len(globalSummary.UnidentifiedMACs)
-		count := 0
-		for mac := range globalSummary.UnidentifiedMACs {
-			count++
-			// Print a clean, updating progress counter
-			fmt.Printf("\r  -> Looking up vendors... (%d/%d)", count, totalMACs)
+	// --- THE MAC LOOKUP LOGIC IS NOW MUCH SIMPLER AND FASTER ---
+	fmt.Println("\n--- Performing Local MAC Vendor Lookups ---")
 
+	// Create a set of all unique MACs that need a lookup
+	allMacsToLookup := make(map[string]string)
+	for mac := range globalSummary.UnidentifiedMACs {
+		allMacsToLookup[mac] = ""
+	}
+	for _, host := range masterMap.Hosts {
+		// Only lookup if we don't already have vendor info from Nmap
+		if (host.Fingerprint == nil || host.Fingerprint.Vendor == "") && host.MACAddress != "" {
+			allMacsToLookup[host.MACAddress] = ""
+		}
+	}
+
+	if len(allMacsToLookup) > 0 {
+		fmt.Printf("  -> Found %d unique MACs to look up.\n", len(allMacsToLookup))
+		for mac := range allMacsToLookup {
 			vendor, err := maclookup.LookupVendor(mac)
-			if err != nil {
-				// Don't log errors, just leave the vendor blank so the display logic handles it
-				globalSummary.UnidentifiedMACs[mac] = ""
-			} else {
+			if err == nil && vendor != "Unknown Vendor" {
+				allMacsToLookup[mac] = vendor
+			}
+		}
+
+		// Now apply the found vendors back to the main data structures
+		for mac, vendor := range allMacsToLookup {
+			if vendor == "" {
+				continue
+			}
+			if host, ok := masterMap.Hosts[mac]; ok {
+				if host.Fingerprint == nil {
+					host.Fingerprint = &model.Fingerprint{}
+				}
+				host.Fingerprint.Vendor = vendor
+			}
+			if _, ok := globalSummary.UnidentifiedMACs[mac]; ok {
 				globalSummary.UnidentifiedMACs[mac] = vendor
 			}
-
-			// Add a 1-second delay to respect API rate limits
-			time.Sleep(1 * time.Second)
 		}
-		fmt.Println("\n✅ MAC Vendor lookup complete.") // Print a newline to clean up the progress counter
+		fmt.Println("✅ Local MAC Vendor lookup complete.")
 	} else {
-		fmt.Println("No unidentified devices to look up.")
+		fmt.Println("No new MAC addresses to look up.")
 	}
 
 	// --- FINAL REPORT DISPLAY ---

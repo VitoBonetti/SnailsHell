@@ -4,38 +4,73 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+	"os"
+
+	"github.com/klauspost/oui"
 )
 
-// apiBaseURL is the base URL for the macvendors.com API.
-const apiBaseURL = "https://api.macvendors.com/"
+// db will hold the loaded OUI database in memory.
+var db oui.OuiDB
 
-// LookupVendor queries macvendors.com for the vendor of a given MAC address.
-func LookupVendor(mac string) (string, error) {
-	// The API is simple: just a GET request to the URL with the MAC.
-	url := fmt.Sprintf("%s%s", apiBaseURL, mac)
+// The official source URL for the OUI database file.
+const ouiURL = "http://standards-oui.ieee.org/oui.txt"
 
-	client := http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+// Init loads the OUI database, downloading it if necessary.
+func Init() error {
+	const filename = "oui.txt"
+
+	// Check if the database file already exists.
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		fmt.Printf("OUI database (%s) not found. Downloading latest version...\n", filename)
+		if err := downloadFile(filename, ouiURL); err != nil {
+			return fmt.Errorf("could not download OUI database: %w", err)
+		}
+		fmt.Println("✅ OUI database downloaded successfully.")
+	}
+
+	// Now that we know the file exists, open it.
+	var err error
+	db, err = oui.OpenFile(filename)
 	if err != nil {
-		return "", fmt.Errorf("failed to make request to MAC vendor API: %w", err)
+		return fmt.Errorf("failed to open OUI database file '%s': %w", filename, err)
+	}
+
+	fmt.Println("✅ OUI database loaded successfully for local MAC lookups.")
+	return nil
+}
+
+// LookupVendor performs a fast, local lookup for the vendor of a given MAC address.
+func LookupVendor(mac string) (string, error) {
+	if db == nil {
+		return "", fmt.Errorf("OUI database not initialized")
+	}
+
+	entry, err := db.Query(mac)
+	if err != nil {
+		// This error means the prefix was not found in the database.
+		return "Unknown Vendor", nil
+	}
+
+	return entry.Manufacturer, nil
+}
+
+// downloadFile is a helper function to download a file from a URL.
+func downloadFile(filepath string, url string) error {
+	// Get the data
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
 	}
 	defer resp.Body.Close()
 
-	// Handle cases where the vendor is not found (404)
-	if resp.StatusCode == http.StatusNotFound {
-		return "Unknown Vendor", nil
-	}
-	// Handle other potential errors
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("received non-200 status code: %d", resp.StatusCode)
-	}
-
-	// Read the vendor name from the response body
-	body, err := io.ReadAll(resp.Body)
+	// Create the file
+	out, err := os.Create(filepath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read MAC vendor response body: %w", err)
+		return err
 	}
+	defer out.Close()
 
-	return string(body), nil
+	// Write the body to file
+	_, err = io.Copy(out, resp.Body)
+	return err
 }
