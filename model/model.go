@@ -1,11 +1,21 @@
 package model
 
+// --- NEW: Define categories for our findings ---
+type FindingCategory string
+
+const (
+	CriticalFinding      FindingCategory = "Critical Vulnerabilities"
+	PotentialFinding     FindingCategory = "Potential Weaknesses"
+	InformationalFinding FindingCategory = "Informational Findings"
+)
+
 // --- NEW: Vulnerability holds details about a specific CVE or weakness. ---
 type Vulnerability struct {
-	PortID      int    // The port the vulnerability was found on (0 for host-level)
-	CVE         string // The CVE identifier, if available
-	Description string // The full description from the Nmap script
-	State       string // e.g., VULNERABLE, LIKELY VULNERABLE
+	PortID      int             // The port the vulnerability was found on (0 for host-level)
+	CVE         string          // The CVE identifier, if available
+	Description string          // The full description from the Nmap script
+	State       string          // e.g., VULNERABLE, LIKELY VULNERABLE
+	Category    FindingCategory // The category is now part of the struct.
 }
 
 // PcapSummary holds global data from all pcap files.
@@ -45,16 +55,17 @@ type NetworkMap struct {
 	Hosts map[string]*Host
 }
 type Host struct {
-	IPv4Addresses   map[string]bool
-	MACAddress      string
-	Status          string
-	Hostnames       []string
-	Ports           map[int]Port
-	Communications  map[string]*Communication
-	DiscoveredBy    string
-	Wifi            *WifiInfo
-	Fingerprint     *Fingerprint
-	Vulnerabilities []Vulnerability
+	IPv4Addresses  map[string]bool
+	MACAddress     string
+	Status         string
+	Hostnames      []string
+	Ports          map[int]Port
+	Communications map[string]*Communication
+	DiscoveredBy   string
+	Wifi           *WifiInfo
+	Fingerprint    *Fingerprint
+	Findings       map[FindingCategory][]Vulnerability
+	DNSLookups     map[string]bool
 }
 type Port struct {
 	ID       int

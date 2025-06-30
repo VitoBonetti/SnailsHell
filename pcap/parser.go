@@ -34,8 +34,55 @@ func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.Pc
 		enrichHostIPData(packet, networkMap, ipToHostKey)
 		enrichHostWifiData(packet, networkMap)
 		enrichHostBehavior(packet, networkMap, ipToHostKey)
+		enrichHostDNS(packet, networkMap, ipToHostKey)
 	}
 	return nil
+}
+
+// --- THE FIX IS HERE: This function now correctly finds DNS packets inside UDP ---
+func enrichHostDNS(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
+	// DNS queries are typically sent over UDP to port 53.
+	// First, check if we have a UDP layer.
+	udpLayer := packet.Layer(layers.LayerTypeUDP)
+	if udpLayer == nil {
+		return
+	}
+	udp, _ := udpLayer.(*layers.UDP)
+
+	// Second, check if the destination port is 53.
+	if udp.DstPort != 53 {
+		return
+	}
+
+	// Now that we know it's a DNS packet, try to decode its payload as DNS.
+	// We use a new packet decoder to parse the UDP payload.
+	dnsPacket := gopacket.NewPacket(udp.Payload, layers.LayerTypeDNS, gopacket.Default)
+	if dnsLayer := dnsPacket.Layer(layers.LayerTypeDNS); dnsLayer != nil {
+		dns, _ := dnsLayer.(*layers.DNS)
+
+		// We only care about DNS queries, not responses.
+		if dns.QR {
+			return
+		}
+
+		// Find the source host using the IP layer from the original packet
+		ipLayer := packet.Layer(layers.LayerTypeIPv4)
+		if ipLayer == nil {
+			return
+		}
+		ip, _ := ipLayer.(*layers.IPv4)
+
+		sourceKey, found := ipToKey[ip.SrcIP.String()]
+		if !found {
+			return
+		}
+		host := networkMap.Hosts[sourceKey]
+
+		// Add each queried name to the host's list
+		for _, q := range dns.Questions {
+			host.DNSLookups[string(q.Name)] = true
+		}
+	}
 }
 
 func updateGlobalSummary(packet gopacket.Packet, summary *model.PcapSummary, networkMap *model.NetworkMap) {

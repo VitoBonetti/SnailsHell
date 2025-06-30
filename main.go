@@ -9,6 +9,7 @@ import (
 	"gonetmap/pcap"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -106,11 +107,10 @@ func main() {
 		fmt.Println("No unidentified devices to look up.")
 	}
 
-	// --- Host-Centric display is unchanged ---
+	// --- FINAL REPORT DISPLAY ---
 	fmt.Println("\n\n===================================================")
 	fmt.Println("          Host-Centric Network Report")
 	fmt.Println("===================================================")
-	// This loop is restored to its full version to show all host details
 	for key, host := range masterMap.Hosts {
 		var ips []string
 		for ip := range host.IPv4Addresses {
@@ -119,6 +119,7 @@ func main() {
 		fmt.Printf("\n--- Host MAC: %s ---\n", key)
 		fmt.Printf("  IP Addresses: %s\n", strings.Join(ips, ", "))
 		fmt.Printf("  Status: %s\n", host.Status)
+
 		if host.Fingerprint != nil {
 			fmt.Printf("  Device Fingerprint:\n")
 			if host.Fingerprint.Vendor != "" {
@@ -137,6 +138,7 @@ func main() {
 				}
 			}
 		}
+
 		if host.Wifi != nil {
 			fmt.Printf("  Wi-Fi Details:\n")
 			if host.Wifi.DeviceRole != "" {
@@ -159,6 +161,7 @@ func main() {
 				fmt.Printf("    WPA Handshake Captured: Yes\n")
 			}
 		}
+
 		if len(host.Ports) > 0 {
 			fmt.Printf("  Nmap Ports:\n")
 			for _, port := range host.Ports {
@@ -169,19 +172,47 @@ func main() {
 				fmt.Printf("    - Port %d/%s (%s): %s\n", port.ID, port.Protocol, port.State, versionInfo)
 			}
 		}
-		// --- NEW: Display Vulnerabilities Found ---
-		if len(host.Vulnerabilities) > 0 {
-			fmt.Printf("  Vulnerabilities Found:\n")
-			for _, vuln := range host.Vulnerabilities {
-				// Customize the display based on what information we found
-				if vuln.PortID != 0 {
-					fmt.Printf("    - Port %d: [%s] %s\n", vuln.PortID, vuln.State, vuln.CVE)
-				} else {
-					fmt.Printf("    - Host-Level: [%s] %s\n", vuln.State, vuln.CVE)
-				}
-				// Print the description indented for readability
-				if vuln.Description != "" {
-					fmt.Printf("        Description: %s\n", vuln.Description)
+
+		if len(host.Findings) > 0 {
+			fmt.Printf("  Vulnerability & Information Summary:\n")
+			displayOrder := []model.FindingCategory{model.CriticalFinding, model.PotentialFinding, model.InformationalFinding}
+			for _, category := range displayOrder {
+				if findings, ok := host.Findings[category]; ok {
+					fmt.Printf("    --- %s ---\n", category)
+					for _, vuln := range findings {
+						title := ""
+						if vuln.State != "" && vuln.State != "NOT VULNERABLE" {
+							title = fmt.Sprintf("[%s] ", vuln.State)
+						}
+						title += vuln.CVE
+						if vuln.PortID != 0 {
+							fmt.Printf("      - Port %d: %s\n", vuln.PortID, title)
+						} else {
+							fmt.Printf("      - Host-Level: %s\n", title)
+						}
+						isVulners := vuln.CVE == "vulners"
+						if isVulners {
+							descriptionLines := strings.Split(vuln.Description, "\n")
+							for i, line := range descriptionLines {
+								trimmedLine := strings.TrimSpace(line)
+								if trimmedLine == "" {
+									continue
+								}
+								if i == 0 {
+									fmt.Printf("        > %s\n", trimmedLine)
+								} else {
+									fmt.Printf("            %s\n", trimmedLine)
+								}
+							}
+						} else if !strings.EqualFold(vuln.Description, vuln.CVE) {
+							descriptionLines := strings.Split(vuln.Description, "\n")
+							for _, line := range descriptionLines {
+								if !strings.EqualFold(strings.TrimSpace(line), vuln.State) {
+									fmt.Printf("          %s\n", strings.TrimSpace(line))
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -194,6 +225,19 @@ func main() {
 				} else {
 					fmt.Printf("    - Talked to %s (%d packets)\n", counterpartIP, comm.PacketCount)
 				}
+			}
+		}
+
+		// --- RESTORED DNS LOOKUP DISPLAY ---
+		if len(host.DNSLookups) > 0 {
+			fmt.Printf("  Observed DNS Lookups:\n")
+			var domains []string
+			for domain := range host.DNSLookups {
+				domains = append(domains, domain)
+			}
+			sort.Strings(domains)
+			for _, domain := range domains {
+				fmt.Printf("    - %s\n", domain)
 			}
 		}
 	}

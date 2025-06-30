@@ -75,20 +75,16 @@ type Status struct {
 	State string `xml:"state,attr"`
 }
 
-// MergeFromFile now initializes the BehavioralClues map.
 func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 	xmlFile, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return err
 	}
-
 	var nmapRun NmapRun
 	if err := xml.Unmarshal(xmlFile, &nmapRun); err != nil {
 		return err
 	}
-
 	fmt.Printf("  -> Merging data from %s...\n", filename)
-
 	for _, nmapHost := range nmapRun.Hosts {
 		var currentIP, currentMAC, vendor string
 		for _, addr := range nmapHost.Addresses {
@@ -102,7 +98,6 @@ func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 				}
 			}
 		}
-
 		key := currentMAC
 		if key == "" {
 			key = currentIP
@@ -110,31 +105,22 @@ func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 		if key == "" {
 			continue
 		}
-
 		existingHost, found := networkMap.Hosts[key]
 		if !found {
 			existingHost = &model.Host{
-				MACAddress:     currentMAC,
-				IPv4Addresses:  make(map[string]bool),
-				Ports:          make(map[int]model.Port),
-				Communications: make(map[string]*model.Communication),
-				DiscoveredBy:   "Nmap",
+				MACAddress: currentMAC, IPv4Addresses: make(map[string]bool), Ports: make(map[int]model.Port),
+				Communications: make(map[string]*model.Communication), DiscoveredBy: "Nmap",
+				Findings:   make(map[model.FindingCategory][]model.Vulnerability),
+				DNSLookups: make(map[string]bool),
 			}
 			networkMap.Hosts[key] = existingHost
 		}
-
 		if existingHost.Fingerprint == nil {
-			// --- THE FIX IS HERE ---
-			// Initialize the fingerprint along with the behavioral clues map
-			existingHost.Fingerprint = &model.Fingerprint{
-				BehavioralClues: make(map[string]bool),
-			}
+			existingHost.Fingerprint = &model.Fingerprint{BehavioralClues: make(map[string]bool)}
 		}
-
 		if vendor != "" {
 			existingHost.Fingerprint.Vendor = vendor
 		}
-
 		if len(nmapHost.Os.OsMatches) > 0 {
 			bestMatch := nmapHost.Os.OsMatches[0]
 			existingHost.Fingerprint.OperatingSystem = bestMatch.Name
@@ -142,67 +128,94 @@ func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 				existingHost.Fingerprint.DeviceType = bestMatch.OsClasses[0].Type
 			}
 		}
-
 		if currentIP != "" {
 			existingHost.IPv4Addresses[currentIP] = true
 		}
 		existingHost.Status = nmapHost.Status.State
-
 		for _, nmapPort := range nmapHost.Ports {
 			if _, portExists := existingHost.Ports[nmapPort.PortID]; !portExists {
-				existingHost.Ports[nmapPort.PortID] = model.Port{
-					ID: nmapPort.PortID, Protocol: nmapPort.Protocol, State: nmapPort.State.State,
-					Service: nmapPort.Service.Name, Version: nmapPort.Service.Product + " " + nmapPort.Service.Version,
-				}
+				existingHost.Ports[nmapPort.PortID] = model.Port{ID: nmapPort.PortID, Protocol: nmapPort.Protocol, State: nmapPort.State.State, Service: nmapPort.Service.Name, Version: nmapPort.Service.Product + " " + nmapPort.Service.Version}
 			}
 		}
 
-		// --- NEW: Parse Port-Level Vulnerabilities ---
-		for _, nmapPort := range nmapHost.Ports {
-			for _, script := range nmapPort.Scripts {
-				// We're interested in any script with "vuln" in its name
-				if strings.Contains(script.ID, "vuln") {
-					vuln := parseVulnerabilityFromScript(script, nmapPort.PortID)
-					existingHost.Vulnerabilities = append(existingHost.Vulnerabilities, vuln)
-				}
+		allScripts := nmapHost.HostScripts
+		for _, p := range nmapHost.Ports {
+			// Associate the port number with the script for context before parsing
+			for i := range p.Scripts {
+				p.Scripts[i].ID = fmt.Sprintf("%s|%d", p.Scripts[i].ID, p.PortID)
 			}
+			allScripts = append(allScripts, p.Scripts...)
 		}
-
-		// --- NEW: Parse Host-Level Vulnerabilities ---
-		for _, script := range nmapHost.HostScripts {
-			if strings.Contains(script.ID, "vuln") {
-				// PortID is 0 to signify a host-level finding
-				vuln := parseVulnerabilityFromScript(script, 0)
-				existingHost.Vulnerabilities = append(existingHost.Vulnerabilities, vuln)
+		for _, script := range allScripts {
+			if vuln, category, isFinding := parseVulnerabilityFromScript(script); isFinding {
+				existingHost.Findings[category] = append(existingHost.Findings[category], vuln)
 			}
 		}
 	}
 	return nil
 }
 
-// --- NEW: Helper function to parse a script into our Vulnerability model ---
-func parseVulnerabilityFromScript(script Script, portID int) model.Vulnerability {
-	vuln := model.Vulnerability{
-		PortID:      portID,
-		Description: strings.TrimSpace(script.Output),
+// --- THIS FUNCTION IS NOW MUCH SMARTER! ---
+func parseVulnerabilityFromScript(script Script) (model.Vulnerability, model.FindingCategory, bool) {
+	// --- THE FIX IS HERE: More robust filtering and categorization ---
+
+	// Separate the port from the script ID if it exists
+	scriptIDParts := strings.Split(script.ID, "|")
+	scriptID := scriptIDParts[0]
+
+	// 1. Blocklist of scripts that are always informational and noisy
+	informationalScripts := map[string]bool{
+		"fingerprint-strings": true, "http-enum": true, "http-trane-info": true,
+	}
+	if informationalScripts[scriptID] {
+		return model.Vulnerability{}, "", false
 	}
 
-	// Try to find structured data like CVE and State
+	output := strings.TrimSpace(script.Output)
+
+	// 2. Blocklist of negative or unhelpful phrases
+	negativeFindings := []string{
+		"Couldn't find any", "The SMTP server is not Exim", "false", "TIMEOUT", "ERROR:",
+	}
+	for _, finding := range negativeFindings {
+		if strings.Contains(output, finding) {
+			return model.Vulnerability{}, "", false
+		}
+	}
+	if output == "" {
+		return model.Vulnerability{}, "", false
+	}
+
+	// 3. Categorize based on content and script ID
+	var category model.FindingCategory
+	if scriptID == "vulners" || strings.Contains(output, "VULNERABLE:") {
+		category = model.CriticalFinding
+	} else if strings.Contains(scriptID, "vuln") {
+		category = model.PotentialFinding
+	} else {
+		// If it's not a known type, we'll discard it to reduce noise
+		return model.Vulnerability{}, "", false
+	}
+
+	vuln := model.Vulnerability{
+		Description: output,
+		Category:    category,
+	}
+
 	for _, table := range script.Tables {
 		for _, elem := range table.Elements {
 			if elem.Key == "id" {
 				vuln.CVE = elem.Value
 			}
 			if elem.Key == "state" {
-				vuln.State = elem.Value
+				vuln.State = strings.ToUpper(strings.TrimSpace(elem.Value))
 			}
 		}
 	}
 
-	// If no structured CVE was found, use the script ID as a fallback
 	if vuln.CVE == "" {
-		vuln.CVE = script.ID
+		vuln.CVE = scriptID
 	}
 
-	return vuln
+	return vuln, category, true
 }
