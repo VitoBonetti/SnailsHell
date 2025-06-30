@@ -4,7 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"gonetmap/model"
-	"io/ioutil"
+	"os"
 	"strings"
 )
 
@@ -76,7 +76,7 @@ type Status struct {
 }
 
 func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
-	xmlFile, err := ioutil.ReadFile(filename)
+	xmlFile, err := os.ReadFile(filename)
 	if err != nil {
 		return err
 	}

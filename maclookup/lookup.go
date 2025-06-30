@@ -2,15 +2,18 @@ package maclookup
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"time"
 )
 
+// apiBaseURL is the base URL for the macvendors.com API.
+const apiBaseURL = "https://api.macvendors.com/"
+
 // LookupVendor queries macvendors.com for the vendor of a given MAC address.
 func LookupVendor(mac string) (string, error) {
 	// The API is simple: just a GET request to the URL with the MAC.
-	url := fmt.Sprintf("https://api.macvendors.com/%s", mac)
+	url := fmt.Sprintf("%s%s", apiBaseURL, mac)
 
 	client := http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
@@ -29,7 +32,7 @@ func LookupVendor(mac string) (string, error) {
 	}
 
 	// Read the vendor name from the response body
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read MAC vendor response body: %w", err)
 	}

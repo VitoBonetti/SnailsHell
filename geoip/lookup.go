@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// apiBaseURL is the base URL for the ip-api.com service.
+const apiBaseURL = "http://ip-api.com/json/"
+
 // apiResponse matches the JSON structure returned by ip-api.com
 type apiResponse struct {
 	Status  string `json:"status"`
@@ -38,7 +41,7 @@ func LookupIP(ipStr string) (*model.GeoInfo, error) {
 		return nil, nil // Not an error, just nothing to do
 	}
 
-	url := fmt.Sprintf("http://ip-api.com/json/%s", ipStr)
+	url := fmt.Sprintf("%s%s", apiBaseURL, ipStr)
 
 	client := http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
