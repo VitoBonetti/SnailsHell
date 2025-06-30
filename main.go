@@ -139,6 +139,7 @@ func main() {
 			}
 		}
 
+		// --- THIS IS THE NEW DISPLAY LOGIC FOR HANDSHAKES ---
 		if host.Wifi != nil {
 			fmt.Printf("  Wi-Fi Details:\n")
 			if host.Wifi.DeviceRole != "" {

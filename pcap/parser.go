@@ -39,33 +39,25 @@ func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.Pc
 	return nil
 }
 
-// --- THE FIX IS HERE: This function now correctly finds DNS packets inside UDP ---
 func enrichHostDNS(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
-	// DNS queries are typically sent over UDP to port 53.
-	// First, check if we have a UDP layer.
 	udpLayer := packet.Layer(layers.LayerTypeUDP)
 	if udpLayer == nil {
 		return
 	}
 	udp, _ := udpLayer.(*layers.UDP)
 
-	// Second, check if the destination port is 53.
 	if udp.DstPort != 53 {
 		return
 	}
 
-	// Now that we know it's a DNS packet, try to decode its payload as DNS.
-	// We use a new packet decoder to parse the UDP payload.
 	dnsPacket := gopacket.NewPacket(udp.Payload, layers.LayerTypeDNS, gopacket.Default)
 	if dnsLayer := dnsPacket.Layer(layers.LayerTypeDNS); dnsLayer != nil {
 		dns, _ := dnsLayer.(*layers.DNS)
 
-		// We only care about DNS queries, not responses.
 		if dns.QR {
 			return
 		}
 
-		// Find the source host using the IP layer from the original packet
 		ipLayer := packet.Layer(layers.LayerTypeIPv4)
 		if ipLayer == nil {
 			return
@@ -78,7 +70,6 @@ func enrichHostDNS(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey
 		}
 		host := networkMap.Hosts[sourceKey]
 
-		// Add each queried name to the host's list
 		for _, q := range dns.Questions {
 			host.DNSLookups[string(q.Name)] = true
 		}
@@ -100,15 +91,11 @@ func updateGlobalSummary(packet gopacket.Packet, summary *model.PcapSummary, net
 			}
 		}
 
-		// --- BEACON FRAME LOGIC (THE FIX IS HERE) ---
 		if dot11.Type == layers.Dot11TypeMgmtBeacon {
 			if ssid, err := getSSIDFromDot11(dot11); err == nil && ssid != "" && ssid != "<hidden or broadcast>" {
-				// Check if the SSID key exists in the outer map
 				if _, ok := summary.AdvertisedAPs[ssid]; !ok {
-					// If not, create the inner map (the set of MACs)
 					summary.AdvertisedAPs[ssid] = make(map[string]bool)
 				}
-				// Add the AP's MAC address to the set for this SSID
 				summary.AdvertisedAPs[ssid][sourceMAC] = true
 			}
 		}
@@ -123,8 +110,6 @@ func updateGlobalSummary(packet gopacket.Packet, summary *model.PcapSummary, net
 		}
 	}
 }
-
-// --- The following functions are now just for enriching known hosts ---
 
 func enrichHostIPData(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
 	ipLayer := packet.Layer(layers.LayerTypeIPv4)
@@ -171,18 +156,42 @@ func enrichHostWifiData(packet gopacket.Packet, networkMap *model.NetworkMap) {
 			}
 		}
 	}
+
+	// --- NEW AND IMPROVED HANDSHAKE DETECTION LOGIC ---
 	if eapolLayer := packet.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
 		if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
 			dot11, _ := dot11Layer.(*layers.Dot11)
-			addr1 := strings.ToUpper(dot11.Address1.String())
-			addr2 := strings.ToUpper(dot11.Address2.String())
-			if host, ok := networkMap.Hosts[addr1]; ok {
-				if host.Wifi == nil {
-					host.Wifi = &model.WifiInfo{ProbeRequests: make(map[string]bool)}
-				}
-				host.Wifi.HasHandshake = true
+
+			// EAPOL frames involve two main parties. Let's check the relevant address fields.
+			// Address1: Destination, Address2: Source
+			addrs := []string{
+				strings.ToUpper(dot11.Address1.String()),
+				strings.ToUpper(dot11.Address2.String()),
 			}
-			if host, ok := networkMap.Hosts[addr2]; ok {
+
+			for _, addr := range addrs {
+				if addr == "" || addr == "00:00:00:00:00:00" {
+					continue
+				}
+
+				// Check if the host is already known
+				host, found := networkMap.Hosts[addr]
+				if !found {
+					// If not, create a new host entry for it
+					host = &model.Host{
+						MACAddress:     addr,
+						DiscoveredBy:   "Pcap (Handshake)",
+						Status:         "Unknown",
+						IPv4Addresses:  make(map[string]bool),
+						Ports:          make(map[int]model.Port),
+						Communications: make(map[string]*model.Communication),
+						Findings:       make(map[model.FindingCategory][]model.Vulnerability),
+						DNSLookups:     make(map[string]bool),
+					}
+					networkMap.Hosts[addr] = host
+				}
+
+				// Now, ensure WifiInfo exists and flag the handshake
 				if host.Wifi == nil {
 					host.Wifi = &model.WifiInfo{ProbeRequests: make(map[string]bool)}
 				}
@@ -223,7 +232,6 @@ func enrichHostBehavior(packet gopacket.Packet, networkMap *model.NetworkMap, ip
 	}
 }
 
-// (getSSIDFromDot11 helper function remains unchanged)
 func getSSIDFromDot11(dot11 *layers.Dot11) (string, error) {
 	payload := dot11.LayerPayload()
 	for len(payload) >= 2 {

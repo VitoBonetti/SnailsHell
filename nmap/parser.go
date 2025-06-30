@@ -8,6 +8,26 @@ import (
 	"strings"
 )
 
+// --- Configuration for Vulnerability Parsing ---
+
+// informationalScripts is a blocklist of script IDs that are generally noisy
+// and not indicative of a direct vulnerability.
+var informationalScripts = map[string]bool{
+	"fingerprint-strings": true,
+	"http-enum":           true,
+	"http-trane-info":     true,
+}
+
+// negativeFindings is a blocklist of phrases that indicate a script
+// did not find a vulnerability.
+var negativeFindings = []string{
+	"Couldn't find any",
+	"The SMTP server is not Exim",
+	"false",
+	"TIMEOUT",
+	"ERROR:",
+}
+
 // (All XML parsing structs remain unchanged)
 type Script struct {
 	ID     string  `xml:"id,attr"`
@@ -163,20 +183,14 @@ func parseVulnerabilityFromScript(script Script) (model.Vulnerability, model.Fin
 	scriptIDParts := strings.Split(script.ID, "|")
 	scriptID := scriptIDParts[0]
 
-	// 1. Blocklist of scripts that are always informational and noisy
-	informationalScripts := map[string]bool{
-		"fingerprint-strings": true, "http-enum": true, "http-trane-info": true,
-	}
+	// 1. Use the package-level blocklist for noisy scripts
 	if informationalScripts[scriptID] {
 		return model.Vulnerability{}, "", false
 	}
 
 	output := strings.TrimSpace(script.Output)
 
-	// 2. Blocklist of negative or unhelpful phrases
-	negativeFindings := []string{
-		"Couldn't find any", "The SMTP server is not Exim", "false", "TIMEOUT", "ERROR:",
-	}
+	// 2. Use the package-level blocklist for negative phrases
 	for _, finding := range negativeFindings {
 		if strings.Contains(output, finding) {
 			return model.Vulnerability{}, "", false
