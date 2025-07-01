@@ -4,11 +4,12 @@ import "encoding/hex"
 
 // --- NEW: Handshake struct to hold crackable data ---
 type Handshake struct {
-	ClientMAC string
-	APMAC     string
-	SSID      string
-	PcapFile  string // The file where the handshake was found
-	HCCAPX    []byte // The handshake data in hccapx format
+	ClientMAC      string
+	APMAC          string
+	SSID           string
+	PcapFile       string // The file where the handshake was found
+	HCCAPX         []byte // The handshake data in hccapx format
+	HandshakeState string
 }
 
 // ToHCCAPXString converts the binary hccapx data to a hex string for easy display.

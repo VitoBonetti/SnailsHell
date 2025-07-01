@@ -1,11 +1,14 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"gonetmap/functions"
 	"gonetmap/model"
+	"gonetmap/storage"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -14,38 +17,65 @@ import (
 	"github.com/google/gopacket/layers"
 )
 
-// Helper function to ensure an SSID is clean before printing
-func cleanString(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsPrint(r) {
-			return r
-		}
-		return -1
-	}, s)
-}
-
+// --- The main function is now streamlined ---
 func main() {
-	if err := functions.Init(); err != nil {
-		log.Fatalf("FATAL: Could not initialize MAC lookup database. Exiting. Error: %v", err)
+	// --- 1. Initialize backend services ---
+	if err := storage.InitDB("gonetmap.db"); err != nil {
+		log.Fatalf("FATAL: Could not initialize database: %v", err)
+	}
+	if err := functions.InitMac(); err != nil {
+		log.Fatalf("FATAL: Could not initialize MAC lookup service: %v", err)
 	}
 
-	// (All parsing logic is unchanged)
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run . <file1.xml> ... <file1.pcapng> ...")
+	// --- 2. Parse the required --campaign flag ---
+	campaignName := flag.String("campaign", "", "Name of the campaign to process (creates it if it doesn't exist)")
+	flag.Parse()
+
+	// --- 3. Validate Input ---
+	if *campaignName == "" {
+		fmt.Println("Error: The --campaign flag is required.")
+		fmt.Println("Usage: go run . --campaign <campaign_name>")
 		return
 	}
 
-	var xmlFiles, pcapFiles []string
-	for _, arg := range os.Args[1:] {
-		if strings.HasSuffix(arg, ".xml") {
-			xmlFiles = append(xmlFiles, arg)
-		} else if strings.HasSuffix(arg, ".pcap") || strings.HasSuffix(arg, ".pcapng") {
-			pcapFiles = append(pcapFiles, arg)
-		}
+	// --- 4. Get or Create the Campaign ---
+	campaignID, err := storage.GetOrCreateCampaign(*campaignName)
+	if err != nil {
+		log.Fatalf("Error handling campaign: %v", err)
 	}
+	fmt.Printf("✅ Operating on Campaign: '%s' (ID: %d)\n", *campaignName, campaignID)
 
+	// --- 5. Discover Data Files ---
+	xmlFiles, pcapFiles, err := findDataFiles("./data")
+	if err != nil {
+		log.Fatalf("Error finding data files in ./data directory: %v", err)
+	}
+	if len(xmlFiles) == 0 && len(pcapFiles) == 0 {
+		log.Println("No .xml or .pcap/.pcapng files found in ./data directory. Nothing to process.")
+		return
+	}
+	fmt.Printf("🔎 Found %d Nmap files and %d Pcap files.\n", len(xmlFiles), len(pcapFiles))
+
+	// --- 6. Parse, Process, and Enrich All Data ---
+	masterMap, globalSummary := processFiles(xmlFiles, pcapFiles)
+
+	// --- 7. Save Results to Database ---
+	fmt.Println("\n--- Saving results to database ---")
+	if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
+		log.Fatalf("FATAL: Could not save results to database: %v", err)
+	}
+	fmt.Println("✅ Scan results saved successfully.")
+
+	// --- 8. Print Console Report ---
+	fmt.Println("\n--- Generating Console Report ---")
+	printConsoleReport(masterMap, globalSummary)
+	fmt.Println("\n✅ Console report generated.")
+}
+
+// processFiles handles the core logic of parsing and enrichment.
+func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapSummary) {
 	masterMap := model.NewNetworkMap()
-	fmt.Println("--- Parsing Nmap files ---")
+	fmt.Println("\n--- Parsing Nmap files ---")
 	for _, file := range xmlFiles {
 		if err := functions.MergeFromFile(file, masterMap); err != nil {
 			log.Printf("Warning: could not parse Nmap file %s: %v", file, err)
@@ -67,7 +97,6 @@ func main() {
 		fmt.Println("\n✅ Pcap enrichment complete.")
 	}
 
-	// Process handshakes after all pcaps are analyzed
 	ProcessHandshakes(eapolTracker, masterMap, globalSummary, packetSources)
 
 	fmt.Println("\n--- Performing Geolocation Lookups ---")
@@ -91,16 +120,12 @@ func main() {
 	}
 	fmt.Println("\n✅ Geolocation enrichment complete.")
 
-	// --- THE MAC LOOKUP LOGIC IS NOW MUCH SIMPLER AND FASTER ---
 	fmt.Println("\n--- Performing Local MAC Vendor Lookups ---")
-
-	// Create a set of all unique MACs that need a lookup
 	allMacsToLookup := make(map[string]string)
 	for mac := range globalSummary.UnidentifiedMACs {
 		allMacsToLookup[mac] = ""
 	}
 	for _, host := range masterMap.Hosts {
-		// Only lookup if we don't already have vendor info from Nmap
 		if (host.Fingerprint == nil || host.Fingerprint.Vendor == "") && host.MACAddress != "" {
 			allMacsToLookup[host.MACAddress] = ""
 		}
@@ -114,8 +139,6 @@ func main() {
 				allMacsToLookup[mac] = vendor
 			}
 		}
-
-		// Now apply the found vendors back to the main data structures
 		for mac, vendor := range allMacsToLookup {
 			if vendor == "" {
 				continue
@@ -135,18 +158,20 @@ func main() {
 		fmt.Println("No new MAC addresses to look up.")
 	}
 
-	// --- FINAL REPORT DISPLAY ---
+	return masterMap, globalSummary
+}
+
+// printConsoleReport contains all the logic for printing the final report.
+func printConsoleReport(networkMap *model.NetworkMap, summary *model.PcapSummary) {
 	fmt.Println("\n\n===================================================")
 	fmt.Println("          Host-Centric Network Report")
 	fmt.Println("===================================================")
 
 	var sortedHosts []*model.Host
-	for _, host := range masterMap.Hosts {
+	for _, host := range networkMap.Hosts {
 		sortedHosts = append(sortedHosts, host)
 	}
-	sort.Slice(sortedHosts, func(i, j int) bool {
-		return sortedHosts[i].MACAddress < sortedHosts[j].MACAddress
-	})
+	sort.Slice(sortedHosts, func(i, j int) bool { return sortedHosts[i].MACAddress < sortedHosts[j].MACAddress })
 
 	for _, host := range sortedHosts {
 		var ips []string
@@ -271,7 +296,6 @@ func main() {
 			}
 		}
 
-		// --- RESTORED DNS LOOKUP DISPLAY ---
 		if len(host.DNSLookups) > 0 {
 			fmt.Printf("  Observed DNS Lookups:\n")
 			var domains []string
@@ -285,45 +309,36 @@ func main() {
 		}
 	}
 
-	// --- Display the Global Pcap Summary Report ---
 	fmt.Println("\n\n===================================================")
 	fmt.Println("            Global Pcap Summary")
 	fmt.Println("===================================================")
 
-	if len(globalSummary.UnidentifiedMACs) > 0 {
+	if len(summary.UnidentifiedMACs) > 0 {
 		fmt.Printf("\n--- Unidentified Devices (Seen in Pcap but not Nmap) ---\n")
-		// --- NEW: Smart Display Logic ---
-		for mac, vendor := range globalSummary.UnidentifiedMACs {
-			// Check if we have a valid vendor name
+		for mac, vendor := range summary.UnidentifiedMACs {
 			if vendor != "" && vendor != "Unknown Vendor" {
 				parts := strings.Split(mac, ":")
 				if len(parts) == 6 {
-					// Format as Vendor-LastHalf
 					lastHalf := strings.Join(parts[3:], ":")
-					// Clean up long vendor names
 					cleanVendor := strings.Split(vendor, ",")[0]
 					fmt.Printf("  - %s-%s\n", cleanVendor, lastHalf)
 				} else {
-					// Fallback for unusually formatted MACs
 					fmt.Printf("  - %s (%s)\n", mac, vendor)
 				}
 			} else {
-				// If no valid vendor, just print the MAC
 				fmt.Printf("  - %s\n", mac)
 			}
 		}
 	}
 
-	// --- ADVERTISING APs - THE FIX IS HERE ---
-	if len(globalSummary.AdvertisedAPs) > 0 {
+	if len(summary.AdvertisedAPs) > 0 {
 		fmt.Printf("\n--- Advertising Access Points (Seen via Beacons) ---\n")
-		for ssid, apMACs := range globalSummary.AdvertisedAPs {
+		for ssid, apMACs := range summary.AdvertisedAPs {
 			var macList []string
 			for mac := range apMACs {
 				macList = append(macList, mac)
 			}
-
-			displaySSID := strings.TrimSpace(cleanString(ssid))
+			displaySSID := cleanString(ssid)
 			if displaySSID == "" {
 				displaySSID = "<Hidden SSID>"
 			}
@@ -331,12 +346,11 @@ func main() {
 		}
 	}
 
-	// --- PROBE REQUESTS - THE FIX IS HERE ---
-	if len(globalSummary.AllProbeRequests) > 0 {
+	if len(summary.AllProbeRequests) > 0 {
 		fmt.Printf("\n--- Wi-Fi Probe Requests (Client Devices Searching) ---\n")
-		for ssid, probers := range globalSummary.AllProbeRequests {
+		for ssid, probers := range summary.AllProbeRequests {
 			count := len(probers)
-			displaySSID := strings.TrimSpace(cleanString(ssid))
+			displaySSID := cleanString(ssid)
 			if displaySSID == "" {
 				displaySSID = "<Hidden SSID>"
 			}
@@ -344,14 +358,14 @@ func main() {
 		}
 	}
 
-	if len(globalSummary.ProtocolCounts) > 0 {
+	if len(summary.ProtocolCounts) > 0 {
 		fmt.Printf("\n--- Overall Protocol Statistics ---\n")
-		for proto, count := range globalSummary.ProtocolCounts {
+		for proto, count := range summary.ProtocolCounts {
 			fmt.Printf("  - %-25s : %d packets\n", proto, count)
 		}
 	}
 
-	if len(globalSummary.CapturedHandshakes) > 0 {
+	if len(summary.CapturedHandshakes) > 0 {
 		fmt.Println("\n\n===================================================")
 		fmt.Println("     Captured Handshakes (for Cracking)")
 		fmt.Println("===================================================")
@@ -360,7 +374,7 @@ func main() {
 		fmt.Println("to a binary file. For example, in Linux/macOS, you can use:")
 		fmt.Println("  xxd -r -p <your_hex_file> > handshake.hccapx")
 
-		for _, hs := range globalSummary.CapturedHandshakes {
+		for _, hs := range summary.CapturedHandshakes {
 			fmt.Printf("\n--- Handshake for SSID: %s ---\n", hs.SSID)
 			fmt.Printf("  Access Point MAC: %s\n", hs.APMAC)
 			fmt.Printf("  Client MAC:       %s\n", hs.ClientMAC)
@@ -370,7 +384,26 @@ func main() {
 	}
 }
 
-// --- THIS FUNCTION IS NOW CORRECTED ---
+// (findDataFiles, ProcessHandshakes, and cleanString functions remain the same)
+func findDataFiles(rootDir string) (xmlFiles, pcapFiles []string, err error) {
+	err = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			ext := strings.ToLower(filepath.Ext(path))
+			if ext == ".xml" {
+				xmlFiles = append(xmlFiles, path)
+			}
+			if ext == ".pcap" || ext == ".pcapng" {
+				pcapFiles = append(pcapFiles, path)
+			}
+		}
+		return nil
+	})
+	return
+}
+
 func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *model.NetworkMap, summary *model.PcapSummary, packetSources map[gopacket.Packet]string) {
 	for sessionKey, packets := range eapolTracker {
 		macs := strings.Split(sessionKey, "-")
@@ -383,26 +416,19 @@ func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *mo
 
 		for _, pkt := range packets {
 			dot11, _ := pkt.Layer(layers.LayerTypeDot11).(*layers.Dot11)
-
-			// --- THIS LOGIC IS NOW CORRECT ---
-			if dot11.Flags.ToDS() && !dot11.Flags.FromDS() { // Frame from client to AP
+			if dot11.Flags.ToDS() && !dot11.Flags.FromDS() {
 				clientMAC = dot11.Address2.String()
 				apMAC = dot11.Address1.String()
-			} else if !dot11.Flags.ToDS() && dot11.Flags.FromDS() { // Frame from AP to client
+			} else if !dot11.Flags.ToDS() && dot11.Flags.FromDS() {
 				apMAC = dot11.Address2.String()
 				clientMAC = dot11.Address1.String()
 			}
-
-			// A more reliable check for the 4 handshake messages would involve inspecting the EAPOL-Key data.
-			// This simplified version checks for the presence of the different directions.
 			if eapolLayer := pkt.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
-				if dot11.Flags.ToDS() { // Messages 2 & 4 are from the client
-					msg2 = true
-					msg4 = true
+				if dot11.Flags.ToDS() {
+					msg2, msg4 = true, true
 				}
-				if dot11.Flags.FromDS() { // Messages 1 & 3 are from the AP
-					msg1 = true
-					msg3 = true
+				if dot11.Flags.FromDS() {
+					msg1, msg3 = true, true
 				}
 			}
 		}
@@ -412,7 +438,6 @@ func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *mo
 			state = "Full"
 		}
 
-		// Update or create hosts
 		for _, addr := range []string{strings.ToUpper(apMAC), strings.ToUpper(clientMAC)} {
 			if addr == "" {
 				continue
@@ -448,16 +473,36 @@ func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *mo
 				ssid = ap.Wifi.SSID
 			}
 
+			// Concatenate the raw data of all EAPOL packets for this session.
+			// This is the real handshake data.
+			var realHandshakeData []byte
+			for _, pkt := range packets {
+				if eapolLayer := pkt.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
+					realHandshakeData = append(realHandshakeData, pkt.Data()...)
+				}
+			}
+
 			lastPacket := packets[len(packets)-1]
 			pcapFile := packetSources[lastPacket]
 
 			summary.CapturedHandshakes = append(summary.CapturedHandshakes, model.Handshake{
-				ClientMAC: strings.ToUpper(clientMAC),
-				APMAC:     strings.ToUpper(apMAC),
-				SSID:      ssid,
-				PcapFile:  pcapFile,
-				HCCAPX:    []byte("SIMULATED_FULL_HANDSHAKE_FOR_" + sessionKey),
+				ClientMAC:      strings.ToUpper(clientMAC),
+				APMAC:          strings.ToUpper(apMAC),
+				SSID:           ssid,
+				PcapFile:       pcapFile,
+				HCCAPX:         realHandshakeData, // <-- Now using the real data
+				HandshakeState: state,
 			})
 		}
 	}
+}
+
+// cleanString is a helper for display.
+func cleanString(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return -1
+	}, s)
 }

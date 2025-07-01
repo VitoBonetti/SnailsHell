@@ -16,7 +16,7 @@ var db oui.OuiDB
 const ouiURL = "http://standards-oui.ieee.org/oui.txt"
 
 // Init loads the OUI database, downloading it if necessary.
-func Init() error {
+func InitMac() error {
 	const filename = "oui.txt"
 
 	// Check if the database file already exists.
