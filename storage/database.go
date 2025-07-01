@@ -44,12 +44,12 @@ func createTables() error {
 		vendor TEXT,
 		status TEXT,
 		discovered_by TEXT,
-		device_type TEXT,          -- <<< NEW COLUMN
-		behavioral_clues TEXT, -- <<< NEW COLUMN
+		device_type TEXT,          
+		behavioral_clues TEXT, 
 		FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
 		UNIQUE(campaign_id, mac_address)
 	);
-	-- (Other table definitions are unchanged)
+	
 	CREATE TABLE IF NOT EXISTS ports (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		host_id INTEGER NOT NULL,
@@ -61,6 +61,7 @@ func createTables() error {
 		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
 		UNIQUE(host_id, port_number, protocol)
 	);
+
 	CREATE TABLE IF NOT EXISTS vulnerabilities (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		host_id INTEGER NOT NULL,
@@ -238,4 +239,154 @@ func GetOrCreateCampaign(name string) (int64, error) {
 	}
 	fmt.Printf("Found existing campaign '%s'. New data will be added to it.\n", name)
 	return campaignID, nil
+}
+
+// HostInfo is a simplified struct for display in the UI.
+type HostInfo struct {
+	ID              int64  `json:"id"`
+	MACAddress      string `json:"mac_address"`
+	IPAddress       string `json:"ip_address"`
+	Vendor          string `json:"vendor"`
+	Status          string `json:"status"`
+	DiscoveredBy    string `json:"discovered_by"`
+	DeviceType      string `json:"device_type"`
+	BehavioralClues string `json:"behavioral_clues"`
+}
+
+// GetHostsByCampaign retrieves a list of all hosts for a given campaign.
+func GetHostsByCampaign(campaignID int64) ([]HostInfo, error) {
+	rows, err := DB.Query("SELECT id, mac_address, ip_address, vendor, status FROM hosts WHERE campaign_id = ?", campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var hosts []HostInfo
+	for rows.Next() {
+		var h HostInfo
+		if err := rows.Scan(&h.ID, &h.MACAddress, &h.IPAddress, &h.Vendor, &h.Status); err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, nil
+}
+
+// CampaignInfo is a simple struct for listing campaigns.
+type CampaignInfo struct {
+	ID        int64
+	Name      string
+	CreatedAt time.Time
+}
+
+// ListCampaigns retrieves all campaigns from the database.
+func ListCampaigns() ([]CampaignInfo, error) {
+	rows, err := DB.Query("SELECT id, name, created_at FROM campaigns ORDER BY created_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var campaigns []CampaignInfo
+	for rows.Next() {
+		var c CampaignInfo
+		if err := rows.Scan(&c.ID, &c.Name, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		campaigns = append(campaigns, c)
+	}
+	return campaigns, nil
+}
+
+// GetHostByID retrieves all details for a single host, correctly handling nested data.
+func GetHostByID(hostID int64) (*model.Host, error) {
+	// Initialize the host with its nested maps and structs
+	host := &model.Host{
+		Ports:         make(map[int]model.Port),
+		IPv4Addresses: make(map[string]bool),
+		Fingerprint:   &model.Fingerprint{},
+	}
+
+	// Temporary variables to hold the data scanned from the database
+	var ipAddress, vendor, deviceType, clues string
+
+	// Get main host details from the database
+	err := DB.QueryRow(`
+		SELECT mac_address, ip_address, vendor, status, device_type, behavioral_clues 
+		FROM hosts WHERE id = ?`, hostID).Scan(
+		&host.MACAddress, &ipAddress, &vendor, &host.Status, &deviceType, &clues,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("host with ID %d not found", hostID)
+		}
+		return nil, fmt.Errorf("error querying host: %w", err)
+	}
+
+	// Correctly populate the nested structs
+	host.IPv4Addresses[ipAddress] = true
+	host.Fingerprint.Vendor = vendor
+	host.Fingerprint.DeviceType = deviceType
+
+	// Re-create the behavioral clues map from the stored string
+	host.Fingerprint.BehavioralClues = make(map[string]bool)
+	if clues != "" {
+		for _, clue := range strings.Split(clues, ", ") {
+			host.Fingerprint.BehavioralClues[clue] = true
+		}
+	}
+
+	// Get all ports for this host (this part was already correct)
+	rows, err := DB.Query("SELECT port_number, protocol, state, service, version FROM ports WHERE host_id = ?", hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var p model.Port
+		// The Port struct uses ID for the port number
+		if err := rows.Scan(&p.ID, &p.Protocol, &p.State, &p.Service, &p.Version); err != nil {
+			return nil, err
+		}
+		host.Ports[p.ID] = p
+	}
+
+	return host, nil
+}
+
+func GetCampaignByID(id int64) (*CampaignInfo, error) {
+	var c CampaignInfo
+	err := DB.QueryRow("SELECT id, name, created_at FROM campaigns WHERE id = ?", id).Scan(&c.ID, &c.Name, &c.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// GetHostsByCampaignPaginated retrieves a specific "page" of hosts.
+func GetHostsByCampaignPaginated(campaignID int64, limit, offset int) ([]HostInfo, error) {
+	rows, err := DB.Query("SELECT id, mac_address, ip_address, vendor, status, discovered_by, device_type, behavioral_clues FROM hosts WHERE campaign_id = ? ORDER BY ip_address DESC LIMIT ? OFFSET ?", campaignID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var hosts []HostInfo
+	for rows.Next() {
+		var h HostInfo
+		if err := rows.Scan(&h.ID, &h.MACAddress, &h.IPAddress, &h.Vendor, &h.Status, &h.DiscoveredBy, &h.DeviceType, &h.BehavioralClues); err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, nil
+}
+
+// CountHostsByCampaign returns the total number of hosts for a campaign.
+func CountHostsByCampaign(campaignID int64) (int, error) {
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ?", campaignID).Scan(&count)
+	return count, err
 }

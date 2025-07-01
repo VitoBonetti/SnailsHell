@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/pkg/browser"
 )
 
 // --- The main function is now streamlined ---
@@ -27,14 +28,29 @@ func main() {
 		log.Fatalf("FATAL: Could not initialize MAC lookup service: %v", err)
 	}
 
-	// --- 2. Parse the required --campaign flag ---
-	campaignName := flag.String("campaign", "", "Name of the campaign to process (creates it if it doesn't exist)")
+	// --- 2. DEFINE AND PARSE ALL FLAGS ---
+	campaignName := flag.String("campaign", "", "Name of the campaign to scan and add data to.")
+	openCampaignName := flag.String("open", "", "Name of the campaign to open in the web UI without running a new scan.")
+	listCampaigns := flag.Bool("list", false, "List all existing campaigns.")
+
 	flag.Parse()
 
 	// --- 3. Validate Input ---
-	if *campaignName == "" {
-		fmt.Println("Error: The --campaign flag is required.")
-		fmt.Println("Usage: go run . --campaign <campaign_name>")
+	// Handle --list
+	if *listCampaigns {
+		handleListCampaigns()
+		return
+	}
+
+	// Handle --open
+	if *openCampaignName != "" {
+		handleOpenCampaign(*openCampaignName)
+		return
+	}
+
+	// Handle --campaign (the main scan workflow)
+	if *campaignName != "" {
+		handleScanCampaign(*campaignName)
 		return
 	}
 
@@ -384,7 +400,79 @@ func printConsoleReport(networkMap *model.NetworkMap, summary *model.PcapSummary
 	}
 }
 
-// (findDataFiles, ProcessHandshakes, and cleanString functions remain the same)
+// handleListCampaigns lists all campaigns and exits.
+func handleListCampaigns() {
+	campaigns, err := storage.ListCampaigns()
+	if err != nil {
+		log.Fatalf("Error listing campaigns: %v", err)
+	}
+	if len(campaigns) == 0 {
+		fmt.Println("No campaigns found.")
+		return
+	}
+	fmt.Println("--- Existing Campaigns ---")
+	for _, c := range campaigns {
+		fmt.Printf("  - ID: %d, Name: %s, Created: %s\n", c.ID, c.Name, c.CreatedAt.Format("2006-01-02 15:04:05"))
+	}
+}
+
+// handleOpenCampaign finds a campaign and launches the web UI immediately.
+func handleOpenCampaign(name string) {
+	campaignID, err := storage.GetOrCreateCampaign(name)
+	if err != nil {
+		log.Fatalf("Error finding campaign: %v", err)
+	}
+	fmt.Printf("✅ Opening Campaign: '%s' (ID: %d)\n", name, campaignID)
+	launchServerAndBrowser(campaignID)
+}
+
+// handleScanCampaign performs the full scan, save, and then launch workflow.
+func handleScanCampaign(name string) {
+	campaignID, err := storage.GetOrCreateCampaign(name)
+	if err != nil {
+		log.Fatalf("Error handling campaign: %v", err)
+	}
+	fmt.Printf("✅ Operating on Campaign: '%s' (ID: %d)\n", name, campaignID)
+
+	xmlFiles, pcapFiles, err := findDataFiles("./data")
+	if err != nil {
+		log.Fatalf("Error finding data files: %v", err)
+	}
+	if len(xmlFiles) == 0 && len(pcapFiles) == 0 {
+		fmt.Println("No new data files found in ./data directory. Launching UI with existing data.")
+	} else {
+		fmt.Printf("🔎 Found %d Nmap files and %d Pcap files.\n", len(xmlFiles), len(pcapFiles))
+
+		// --- THIS IS THE CORRECT ORDER ---
+		// 1. Process all the files first
+		masterMap, globalSummary := processFiles(xmlFiles, pcapFiles)
+
+		// 2. Save the results to the database
+		fmt.Println("\n--- Saving results to database ---")
+		if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
+			log.Fatalf("FATAL: Could not save results to database: %v", err)
+		}
+		fmt.Println("✅ Scan results saved successfully.")
+
+		// 3. Print the console report
+		fmt.Println("\n--- Generating Console Report ---")
+		printConsoleReport(masterMap, globalSummary)
+		fmt.Println("\n✅ Console report generated.")
+	}
+
+	// 4. Launch the server and browser ONLY AFTER everything else is done.
+	launchServerAndBrowser(campaignID)
+}
+
+// launchServerAndBrowser is a new helper function to avoid repeating code.
+func launchServerAndBrowser(campaignID int64) {
+	go functions.StartServer(campaignID)
+	browser.OpenURL("http://localhost:8080")
+	// Keep the main thread alive so the server can run
+	select {}
+}
+
+// findDataFiles scans a directory for relevant data files.
 func findDataFiles(rootDir string) (xmlFiles, pcapFiles []string, err error) {
 	err = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -394,8 +482,7 @@ func findDataFiles(rootDir string) (xmlFiles, pcapFiles []string, err error) {
 			ext := strings.ToLower(filepath.Ext(path))
 			if ext == ".xml" {
 				xmlFiles = append(xmlFiles, path)
-			}
-			if ext == ".pcap" || ext == ".pcapng" {
+			} else if ext == ".pcap" || ext == ".pcapng" {
 				pcapFiles = append(pcapFiles, path)
 			}
 		}
