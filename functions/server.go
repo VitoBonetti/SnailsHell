@@ -3,8 +3,10 @@ package functions
 import (
 	"fmt"
 	"gonetmap/storage"
+	"html/template"
 	"net/http"
 	"strconv" // <-- Make sure this is imported
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,12 +16,17 @@ func StartServer(campaignID int64) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
+	// This makes the "replace" function available in your HTML.
+	router.SetFuncMap(template.FuncMap{
+		"replace": func(input, from, to string) string {
+			return strings.ReplaceAll(input, from, to)
+		},
+	})
+
 	// Tell Gin where to find all template files.
 	router.LoadHTMLGlob("templates/*")
 
-	// --- Define Web Page Routes ---
-
-	// Route for the main dashboard
+	// In the StartServer function, update the GET "/" route handler
 	router.GET("/", func(c *gin.Context) {
 		campaign, err := storage.GetCampaignByID(campaignID)
 		if err != nil {
@@ -31,9 +38,17 @@ func StartServer(campaignID int64) {
 			c.String(http.StatusInternalServerError, "Could not load campaigns.")
 			return
 		}
+		// NEW: Get dashboard summary
+		summary, err := storage.GetDashboardSummary(campaignID)
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Could not load dashboard summary.")
+			return
+		}
+
 		c.HTML(http.StatusOK, "dashboard.html", gin.H{
 			"Campaign":     campaign,
 			"AllCampaigns": all_campaigns,
+			"Summary":      summary, // NEW
 		})
 	})
 
@@ -56,12 +71,14 @@ func StartServer(campaignID int64) {
 		hostID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 		host, err := storage.GetHostByID(hostID)
 		if err != nil {
-			// Redirect to an error message or just show a simple text error
 			c.String(http.StatusNotFound, "Host not found")
 			return
 		}
+
+		// Pass the host data AND the campaignID to the template
 		c.HTML(http.StatusOK, "host_detail.html", gin.H{
-			"Host": host,
+			"Host":       host,
+			"CampaignID": campaignID, // <-- Pass the ID for the "back" button
 		})
 	})
 
@@ -74,7 +91,7 @@ func StartServer(campaignID int64) {
 		}
 
 		// 2. Set the number of items per page
-		const pageSize = 25
+		const pageSize = 24
 		offset := (page - 1) * pageSize
 
 		// 3. Get the total number of hosts to calculate total pages
@@ -97,6 +114,89 @@ func StartServer(campaignID int64) {
 			"hosts":       hosts,
 			"currentPage": page,
 			"totalPages":  totalPages,
+		})
+	})
+
+	router.GET("/hosts/:id/communications_graph", func(c *gin.Context) {
+		hostID, _ := c.Params.Get("id")
+		c.HTML(http.StatusOK, "communications_graph.html", gin.H{
+			"HostID": hostID,
+		})
+	})
+
+	router.GET("/api/hosts/:id/communications", func(c *gin.Context) {
+		hostID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		host, err := storage.GetHostByID(hostID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Host not found"})
+			return
+		}
+
+		// Define structs for the vis.js format
+		type Node struct {
+			ID    string `json:"id"`
+			Label string `json:"label"`
+			Title string `json:"title,omitempty"` // Tooltip
+			Shape string `json:"shape"`
+			Color string `json:"color,omitempty"`
+		}
+		type Edge struct {
+			From  string `json:"from"`
+			To    string `json:"to"`
+			Label string `json:"label"`
+		}
+
+		nodes := []Node{}
+		edges := []Edge{}
+
+		// Add the central host node
+		nodes = append(nodes, Node{
+			ID:    "host",
+			Label: host.MACAddress,
+			Shape: "database",
+			Color: "#f39c12", // 1. CHANGED: A lighter, more readable orange
+		})
+
+		// Add a node and an edge for each communication
+		for ip, comm := range host.Communications {
+			nodeID := strings.ReplaceAll(ip, ".", "_")
+			label := ip
+			tooltip := ip
+			var locationParts []string // 2. NEW: Smarter way to build the location string
+
+			if comm.Geo != nil {
+				if comm.Geo.City != "" {
+					locationParts = append(locationParts, comm.Geo.City)
+				}
+				if comm.Geo.Country != "" {
+					locationParts = append(locationParts, comm.Geo.Country)
+				}
+				if comm.Geo.ISP != "" {
+					tooltip += "\nISP: " + comm.Geo.ISP
+				}
+			}
+
+			if len(locationParts) > 0 {
+				label += "\n" + strings.Join(locationParts, ", ")
+			}
+
+			nodes = append(nodes, Node{
+				ID:    nodeID,
+				Label: label,
+				Title: tooltip,
+				Shape: "box",
+			})
+
+			edges = append(edges, Edge{
+				From:  "host",
+				To:    nodeID,
+				Label: fmt.Sprintf("%d pkts", comm.PacketCount),
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"nodes": nodes,
+			"edges": edges,
 		})
 	})
 

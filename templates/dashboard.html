@@ -3,23 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <title>goNetMap Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-LN+7fdVzj6u52u30Kp6M/trliBMCMKTyK833zpbD+pXdCLuTusPj697FH4R/5mcr" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css">
     <style>
-        body { background-color: #f8f9fa; }
-        .table-hover tbody tr:hover { cursor: pointer; background-color: #e9ecef; }
-        .pagination .page-item.active .page-link { z-index: 1; } /* Fix for active page link */
+        body { background-color: #f0f2f5; }
+        .campaign-card { background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,.1); }
+        .summary-card { text-align: center; padding: 20px; }
+        .summary-card .icon { font-size: 2rem; }
+        .summary-card h5 { margin-top: 10px; font-weight: 600; }
+        .host-card {
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,.05);
+            transition: all 0.2s ease-in-out;
+            cursor: pointer;
+        }
+        .host-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 4px 8px rgba(0,0,0,.1);
+        }
     </style>
 </head>
 <body>
     <div class="container-fluid mt-4">
-        <div class="m-2 text-center h2 text-dark-emphsis rounded-3">
-            <i class="bi bi-radar"></i> goNetMap
-        </div>
-        <div class="d-flex justify-content-end mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 class="text-dark-emphasis"><i class="bi bi-radar"></i> goNetMap</h2>
             <div class="d-flex align-items-center">
                 <label for="campaign-switcher" class="form-label me-2 mb-0">Switch Campaign:</label>
-                <select class="form-select form-select-sm" id="campaign-switcher" style="width: 250px;" onchange="switchCampaign(this.value)">
+                <select class="form-select" id="campaign-switcher" style="width: 250px;" onchange="switchCampaign(this.value)">
                     {{range .AllCampaigns}}
                         <option value="{{.ID}}" {{if eq .ID $.Campaign.ID}}selected{{end}}>
                             {{.Name}}
@@ -29,112 +40,141 @@
             </div>
         </div>
 
-        <script>
-            function switchCampaign(campaignId) {
-                // This function will need to be updated to correctly switch campaigns.
-                // For now, it will correctly build the UI.
-                // A simple approach is to redirect to the correct URL.
-                window.location.href = `/?campaign_id=${campaignId}`; 
-            }
-        </script>
-        <div class="alert alert-success">
-            <h4 class="alert-heading"><i class="bi bi-exposure" title="Campaign"></i> {{ .Campaign.Name }}</h4>
+        <div class="p-4 mb-4 campaign-card">
+            <h3 class="alert-heading"><i class="bi bi-box-arrow-in-right"></i> Campaign: {{ .Campaign.Name }}</h3>
+            <p>Created on: <span class="fw-bold">{{.Campaign.CreatedAt.Format "Monday, January 2, 2006"}}</span></p>
             <hr>
-            <div>Created on: <span class="fw-bold fst-italic secondary">{{.Campaign.CreatedAt.Format "Monday, January 2, 2006" }}</span></div>
-            <div class="mb-0">Displaying data for Campaign ID: <span class="fw-bold secondary fst-italic">{{ .Campaign.ID }}</span></div>
+            <div class="row">
+                <div class="col-md-1">
+                    <div class="summary-card">
+                        <div class="icon text-primary"><i class="bi bi-hdd-stack"></i></div>
+                        <h5>{{ .Summary.TotalHosts }}</h5>
+                        <p class="text-muted">Total Hosts</p>
+                    </div>
+                </div>
+                <div class="col-md-1">
+                    <div class="summary-card">
+                        <div class="icon text-success"><i class="bi bi-wifi"></i></div>
+                        <h5>{{ .Summary.HostsUp }}</h5>
+                        <p class="text-muted">Hosts Up</p>
+                    </div>
+                </div>
+                <div class="col-md-1">
+                    <div class="summary-card">
+                        <div class="icon text-danger"><i class="bi bi-wifi-off"></i></div>
+                        <h5>{{ .Summary.HostsDown }}</h5>
+                        <p class="text-muted">Hosts Down</p>
+                    </div>
+                </div>
+                <div class="col-md-1">
+                    <div class="summary-card">
+                        <div class="icon text-warning"><i class="bi bi-shield-exclamation"></i></div>
+                        <h5>{{ .Summary.TotalVulnerabilitiesCount }}</h5>
+                        <p class="text-muted">Vulnerabilities</p>
+                    </div>
+                </div>
+
+                <div class="col-md-1">
+                    <div class="summary-card">
+                        <div class="icon" style="color: #6f42c1;"><i class="bi bi-key-fill"></i></div>
+                        <h5>{{ .Summary.CapturedHandshakesCount }}</h5>
+                        <p class="text-muted">Handshakes</p>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="summary-card align-items-end">
+                         <div class="icon text-primary"><i class="bi bi-door-open"></i></div>
+                         <h5>Most Common Ports</h5>
+                         <p class="text-muted">
+                            {{range .Summary.MostCommonPorts}}
+                                <span class="badge bg-primary me-1">{{.}}</span>
+                            {{else}}
+                                No open ports found.
+                            {{end}}
+                         </p>
+                    </div>
+                </div>
+            </div>
         </div>
-        <hr>
-        <h2 class="m-3">Discovered Hosts</h2>
-        <table class="table table-sm table-responsive table-hover table-striped ps-5 pe-5">
-            <thead class="table-dark">
-                <tr>
-                    <th style="width: 10%;">MAC Address</th>
-                    <th style="width: 10%;">Last Seen IP</th>
-                    <th style="width: 20%;">Vendor</th>
-                    <th style="width: 5%;">Status</th>
-                    <th style="width: 15%;">Discover By</th>
-                    <th style="width: 20%;">Device Type</th>
-                    <th style="width: 20%;">Behavioral Clues</th>
 
+        <h3 class="mb-3">Discovered Hosts</h3>
+        <div class="row g-4" id="hosts-container">
+            </div>
 
-                </tr>
-            </thead>
-            <tbody id="hosts-table-body"></tbody>
-        </table>
-
-        <nav>
-            <ul class="pagination justify-content-center" id="pagination-controls">
-            </ul>
+        <nav class="mt-4">
+            <ul class="pagination justify-content-center" id="pagination-controls"></ul>
         </nav>
     </div>
 
     <script>
-        const tableBody = document.getElementById('hosts-table-body');
+        function switchCampaign(campaignId) {
+            window.location.href = `/?campaign_id=${campaignId}`;
+        }
+
+        const hostsContainer = document.getElementById('hosts-container');
         const paginationControls = document.getElementById('pagination-controls');
 
-        // This function fetches data for a specific page and renders everything
         function loadPage(page) {
             fetch(`/api/hosts?page=${page}`)
                 .then(response => response.json())
                 .then(data => {
-                    // Clear previous table content
-                    tableBody.innerHTML = '';
+                    hostsContainer.innerHTML = ''; // Clear previous content
 
-                    // Populate table with new host data
                     if (data.hosts && data.hosts.length > 0) {
                         data.hosts.forEach(host => {
-                            let row = tableBody.insertRow();
-                            row.setAttribute('onclick', `window.location='/hosts/${host.id}'`);
-                            row.innerHTML = `
-                                <td>${host.mac_address}</td>
-                                <td>${host.ip_address}</td>
-                                <td>${host.vendor}</td>
-                                <td><span class="badge bg-success">${host.status}</span></td>
-                                <td>${host.discovered_by}</td>
-                                <td>${host.device_type}</td>
-                                <td>${host.behavioral_clues}</td>
+                            const col = document.createElement('div');
+                            col.className = 'col-md-4';
+                            col.innerHTML = `
+                                <div class="host-card p-3" onclick="window.location='/hosts/${host.id}'">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <h5 class="mb-0">${host.mac_address}</h5>
+                                        <span class="badge ${host.status === 'up' ? 'bg-success' : 'bg-danger'}">${host.status}</span>
+                                    </div>
+                                    <p class="text-muted mb-2">${host.vendor || 'Unknown Vendor'}</p>
+                                    <div class="d-flex justify-content-between">
+                                        <span><i class="bi bi-pc-display-horizontal"></i> ${host.ip_address}</span>
+                                        <span><i class="bi bi-tag"></i> ${host.device_type || 'Generic Device'}</span>
+                                    </div>
+                                </div>
                             `;
+                            hostsContainer.appendChild(col);
                         });
                     } else {
-                        tableBody.innerHTML = '<tr><td colspan="5" class="text-center">No hosts found.</td></tr>';
+                        hostsContainer.innerHTML = '<div class="col text-center"><p>No hosts found for this campaign.</p></div>';
                     }
 
-                    // Render pagination controls
                     renderPagination(data.currentPage, data.totalPages);
                 })
                 .catch(error => console.error('Error fetching host data:', error));
         }
 
-        // This function creates the pagination buttons
         function renderPagination(currentPage, totalPages) {
             paginationControls.innerHTML = '';
             if (totalPages <= 1) return;
 
-            // "Previous" button
-            let prevLi = document.createElement('li');
+            // Previous button
+            const prevLi = document.createElement('li');
             prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
-            prevLi.innerHTML = `<a class="page-link" href="#" onclick="loadPage(${currentPage - 1})">Previous</a>`;
+            prevLi.innerHTML = `<a class="page-link" href="#" onclick="event.preventDefault(); loadPage(${currentPage - 1});">Previous</a>`;
             paginationControls.appendChild(prevLi);
 
             // Page number buttons
             for (let i = 1; i <= totalPages; i++) {
-                let pageLi = document.createElement('li');
+                const pageLi = document.createElement('li');
                 pageLi.className = `page-item ${i === currentPage ? 'active' : ''}`;
-                pageLi.innerHTML = `<a class="page-link" href="#" onclick="loadPage(${i})">${i}</a>`;
+                pageLi.innerHTML = `<a class="page-link" href="#" onclick="event.preventDefault(); loadPage(${i});">${i}</a>`;
                 paginationControls.appendChild(pageLi);
             }
 
-            // "Next" button
-            let nextLi = document.createElement('li');
+            // Next button
+            const nextLi = document.createElement('li');
             nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
-            nextLi.innerHTML = `<a class="page-link" href="#" onclick="loadPage(${currentPage + 1})">Next</a>`;
+            nextLi.innerHTML = `<a class="page-link" href="#" onclick="event.preventDefault(); loadPage(${currentPage + 1});">Next</a>`;
             paginationControls.appendChild(nextLi);
         }
 
-        // Load the first page initially
+        // Initial load
         document.addEventListener('DOMContentLoaded', () => loadPage(1));
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js" integrity="sha384-I7E8VVD/ismYTF4hNIPjVp/Zjvgyol6VFvRkX/vR+Vc4jQkC+hVqc2pM8ODewa9r" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/js/bootstrap.min.js" integrity="sha384-7qAoOXltbVP82dhxHAUje59V5r2YsVfBafyUDxEdApLPmcdhBPg1DKg1ERo0BZlK" crossorigin="anonymous"></script>
 </body>
 </html>

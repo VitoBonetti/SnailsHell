@@ -73,6 +73,7 @@ type NetworkMap struct {
 	Hosts map[string]*Host
 }
 type Host struct {
+	ID             int64
 	IPv4Addresses  map[string]bool
 	MACAddress     string
 	Status         string

@@ -302,19 +302,24 @@ func ListCampaigns() ([]CampaignInfo, error) {
 func GetHostByID(hostID int64) (*model.Host, error) {
 	// Initialize the host with its nested maps and structs
 	host := &model.Host{
-		Ports:         make(map[int]model.Port),
-		IPv4Addresses: make(map[string]bool),
-		Fingerprint:   &model.Fingerprint{},
+		Ports:          make(map[int]model.Port),
+		IPv4Addresses:  make(map[string]bool),
+		Fingerprint:    &model.Fingerprint{},
+		Findings:       make(map[model.FindingCategory][]model.Vulnerability), // Initialize Findings
+		Communications: make(map[string]*model.Communication),                 // Initialize Communications
+		DNSLookups:     make(map[string]bool),                                 // Initialize DNSLookups
 	}
 
+	host.ID = hostID
+
 	// Temporary variables to hold the data scanned from the database
-	var ipAddress, vendor, deviceType, clues string
+	var ipAddress, vendor, osGuess, deviceType, clues string
 
 	// Get main host details from the database
 	err := DB.QueryRow(`
-		SELECT mac_address, ip_address, vendor, status, device_type, behavioral_clues 
+		SELECT mac_address, ip_address, vendor, os_guess, status, device_type, behavioral_clues
 		FROM hosts WHERE id = ?`, hostID).Scan(
-		&host.MACAddress, &ipAddress, &vendor, &host.Status, &deviceType, &clues,
+		&host.MACAddress, &ipAddress, &vendor, &osGuess, &host.Status, &deviceType, &clues,
 	)
 
 	if err != nil {
@@ -327,9 +332,9 @@ func GetHostByID(hostID int64) (*model.Host, error) {
 	// Correctly populate the nested structs
 	host.IPv4Addresses[ipAddress] = true
 	host.Fingerprint.Vendor = vendor
+	host.Fingerprint.OperatingSystem = osGuess
 	host.Fingerprint.DeviceType = deviceType
 
-	// Re-create the behavioral clues map from the stored string
 	host.Fingerprint.BehavioralClues = make(map[string]bool)
 	if clues != "" {
 		for _, clue := range strings.Split(clues, ", ") {
@@ -337,20 +342,76 @@ func GetHostByID(hostID int64) (*model.Host, error) {
 		}
 	}
 
-	// Get all ports for this host (this part was already correct)
-	rows, err := DB.Query("SELECT port_number, protocol, state, service, version FROM ports WHERE host_id = ?", hostID)
+	// Get all ports for this host
+	portRows, err := DB.Query("SELECT id, port_number, protocol, state, service, version FROM ports WHERE host_id = ?", hostID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer portRows.Close()
 
-	for rows.Next() {
+	portIDMap := make(map[int64]int) // Map DB port ID to port number for vulnerabilities
+	for portRows.Next() {
 		var p model.Port
-		// The Port struct uses ID for the port number
-		if err := rows.Scan(&p.ID, &p.Protocol, &p.State, &p.Service, &p.Version); err != nil {
+		var dbPortID int64
+		if err := portRows.Scan(&dbPortID, &p.ID, &p.Protocol, &p.State, &p.Service, &p.Version); err != nil {
 			return nil, err
 		}
 		host.Ports[p.ID] = p
+		portIDMap[dbPortID] = p.ID
+	}
+
+	// NEW: Get vulnerabilities for this host
+	vulnRows, err := DB.Query("SELECT port_id, cve, description, state, category FROM vulnerabilities WHERE host_id = ?", hostID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query vulnerabilities: %w", err)
+	}
+	defer vulnRows.Close()
+	for vulnRows.Next() {
+		var v model.Vulnerability
+		var portID sql.NullInt64
+		if err := vulnRows.Scan(&portID, &v.CVE, &v.Description, &v.State, &v.Category); err != nil {
+			return nil, err
+		}
+		if portID.Valid {
+			v.PortID = portIDMap[portID.Int64]
+		}
+		host.Findings[v.Category] = append(host.Findings[v.Category], v)
+	}
+
+	// NEW: Get communications for this host
+	commRows, err := DB.Query("SELECT counterpart_ip, packet_count, geo_country, geo_city, geo_isp FROM communications WHERE host_id = ?", hostID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query communications: %w", err)
+	}
+	defer commRows.Close()
+	for commRows.Next() {
+		var comm model.Communication
+		var country, city, isp sql.NullString
+		if err := commRows.Scan(&comm.CounterpartIP, &comm.PacketCount, &country, &city, &isp); err != nil {
+			return nil, err
+		}
+		if country.Valid || city.Valid || isp.Valid {
+			comm.Geo = &model.GeoInfo{
+				Country: country.String,
+				City:    city.String,
+				ISP:     isp.String,
+			}
+		}
+		host.Communications[comm.CounterpartIP] = &comm
+	}
+
+	// NEW: Get DNS lookups for this host
+	dnsRows, err := DB.Query("SELECT domain FROM dns_lookups WHERE host_id = ?", hostID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query dns lookups: %w", err)
+	}
+	defer dnsRows.Close()
+	for dnsRows.Next() {
+		var domain string
+		if err := dnsRows.Scan(&domain); err != nil {
+			return nil, err
+		}
+		host.DNSLookups[domain] = true
 	}
 
 	return host, nil
@@ -389,4 +450,79 @@ func CountHostsByCampaign(campaignID int64) (int, error) {
 	var count int
 	err := DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ?", campaignID).Scan(&count)
 	return count, err
+}
+
+// DashboardSummary holds summary data for the main dashboard.
+type DashboardSummary struct {
+	TotalHosts                int
+	HostsUp                   int
+	HostsDown                 int
+	MostCommonPorts           []string
+	CriticalVulnCount         int
+	PotentialVulnCount        int
+	InformationalVulnCount    int
+	CapturedHandshakesCount   int
+	TotalVulnerabilitiesCount int
+}
+
+// GetDashboardSummary retrieves summary statistics for a given campaign.
+func GetDashboardSummary(campaignID int64) (*DashboardSummary, error) {
+	summary := &DashboardSummary{}
+
+	// Get total hosts
+	err := DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ?", campaignID).Scan(&summary.TotalHosts)
+	if err != nil {
+		return nil, fmt.Errorf("could not count hosts: %w", err)
+	}
+
+	// Get hosts up/down
+	err = DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ? AND status = 'up'", campaignID).Scan(&summary.HostsUp)
+	if err != nil {
+		return nil, fmt.Errorf("could not count up hosts: %w", err)
+	}
+	summary.HostsDown = summary.TotalHosts - summary.HostsUp
+
+	// Get most common ports
+	rows, err := DB.Query(`
+		SELECT p.port_number
+		FROM ports p
+		JOIN hosts h ON p.host_id = h.id
+		WHERE h.campaign_id = ? AND p.state = 'open'
+		GROUP BY p.port_number
+		ORDER BY COUNT(p.port_number) DESC
+		LIMIT 5`, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("could not get common ports: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var port string
+		if err := rows.Scan(&port); err != nil {
+			return nil, err
+		}
+		summary.MostCommonPorts = append(summary.MostCommonPorts, port)
+	}
+
+	// Get vulnerability counts
+	err = DB.QueryRow("SELECT COUNT(*) FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id WHERE h.campaign_id = ? AND v.category = ?", campaignID, model.CriticalFinding).Scan(&summary.CriticalVulnCount)
+	if err != nil {
+		return nil, fmt.Errorf("could not count critical vulnerabilities: %w", err)
+	}
+	err = DB.QueryRow("SELECT COUNT(*) FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id WHERE h.campaign_id = ? AND v.category = ?", campaignID, model.PotentialFinding).Scan(&summary.PotentialVulnCount)
+	if err != nil {
+		return nil, fmt.Errorf("could not count potential vulnerabilities: %w", err)
+	}
+	err = DB.QueryRow("SELECT COUNT(*) FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id WHERE h.campaign_id = ? AND v.category = ?", campaignID, model.InformationalFinding).Scan(&summary.InformationalVulnCount)
+	if err != nil {
+		return nil, fmt.Errorf("could not count informational vulnerabilities: %w", err)
+	}
+
+	summary.TotalVulnerabilitiesCount = summary.CriticalVulnCount + summary.PotentialVulnCount + summary.InformationalVulnCount
+
+	err = DB.QueryRow("SELECT COUNT(*) FROM handshakes WHERE campaign_id = ?", campaignID).Scan(&summary.CapturedHandshakesCount)
+	if err != nil {
+		return nil, fmt.Errorf("could not count handshakes: %w", err)
+	}
+
+	return summary, nil
 }
