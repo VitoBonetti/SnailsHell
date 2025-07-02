@@ -31,7 +31,7 @@
                 <h2 class="mb-0"><i class="bi bi-key-fill me-2"></i> Captured Handshakes</h2>
                 <p class="text-muted">WPA/WPA2 handshakes captured during the scan.</p>
             </div>
-            <a href="/?campaign_id={{.CampaignID}}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Dashboard</a>
+            <a href="/campaign/{{.CampaignID}}/" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Dashboard</a>
         </div>
 
         {{if .Handshakes}}
@@ -68,33 +68,31 @@
         <nav class="mt-4" aria-label="Page navigation">
             <ul class="pagination justify-content-center">
                 <li class="page-item {{if eq .CurrentPage 1}}disabled{{end}}">
-                    <a class="page-link" href="/handshakes?page={{.CurrentPage | add -1}}">Previous</a>
+                    <a class="page-link" href="/campaign/{{.CampaignID}}/handshakes?page={{.CurrentPage | add -1}}">Previous</a>
                 </li>
 
                 {{range $i, $e := makeSlice .TotalPages}}
                     <li class="page-item {{if eq (add $i 1) $.CurrentPage}}active{{end}}">
-                        <a class="page-link" href="/handshakes?page={{add $i 1}}">{{add $i 1}}</a>
+                        <a class="page-link" href="/campaign/{{.CampaignID}}/handshakes?page={{add $i 1}}">{{add $i 1}}</a>
                     </li>
                 {{end}}
 
                 <li class="page-item {{if eq .CurrentPage .TotalPages}}disabled{{end}}">
-                    <a class="page-link" href="/handshakes?page={{.CurrentPage | add 1}}">Next</a>
+                    <a class="page-link" href="/campaign/{{.CampaignID}}/handshakes?page={{.CurrentPage | add 1}}">Next</a>
                 </li>
             </ul>
         </nav>
-        
     </div>
 
     <script>
         function copyToClipboard(elementId, button) {
             const textToCopy = document.getElementById(elementId).innerText;
             navigator.clipboard.writeText(textToCopy).then(() => {
-                // Provide user feedback
                 const originalIcon = button.innerHTML;
                 button.innerHTML = '<i class="bi bi-check-lg"></i>';
                 setTimeout(() => {
                     button.innerHTML = originalIcon;
-                }, 2000); // Revert after 2 seconds
+                }, 2000);
             }).catch(err => {
                 console.error('Failed to copy text: ', err);
             });

@@ -18,7 +18,6 @@ import (
 	"github.com/pkg/browser"
 )
 
-// --- The main function is now streamlined ---
 func main() {
 	// --- 1. Initialize backend services ---
 	if err := storage.InitDB("gonetmap.db"); err != nil {
@@ -28,64 +27,39 @@ func main() {
 		log.Fatalf("FATAL: Could not initialize MAC lookup service: %v", err)
 	}
 
-	// --- 2. DEFINE AND PARSE ALL FLAGS ---
+	// --- 2. Define and parse all flags ---
 	campaignName := flag.String("campaign", "", "Name of the campaign to scan and add data to.")
 	openCampaignName := flag.String("open", "", "Name of the campaign to open in the web UI without running a new scan.")
 	listCampaigns := flag.Bool("list", false, "List all existing campaigns.")
 
 	flag.Parse()
 
-	// --- 3. Validate Input ---
-	// Handle --list
+	// --- 3. Handle different modes ---
 	if *listCampaigns {
 		handleListCampaigns()
 		return
 	}
 
-	// Handle --open
-	if *openCampaignName != "" {
-		handleOpenCampaign(*openCampaignName)
-		return
-	}
-
-	// Handle --campaign (the main scan workflow)
+	// --campaign: Run a scan, then start the server and open the browser.
 	if *campaignName != "" {
-		handleScanCampaign(*campaignName)
+		handleScanCampaign(*campaignName) // This function now handles everything and blocks.
 		return
 	}
 
-	// --- 4. Get or Create the Campaign ---
-	campaignID, err := storage.GetOrCreateCampaign(*campaignName)
-	if err != nil {
-		log.Fatalf("Error handling campaign: %v", err)
-	}
-	fmt.Printf("✅ Operating on Campaign: '%s' (ID: %d)\n", *campaignName, campaignID)
-
-	// --- 5. Discover Data Files ---
-	xmlFiles, pcapFiles, err := findDataFiles("./data")
-	if err != nil {
-		log.Fatalf("Error finding data files in ./data directory: %v", err)
-	}
-	if len(xmlFiles) == 0 && len(pcapFiles) == 0 {
-		log.Println("No .xml or .pcap/.pcapng files found in ./data directory. Nothing to process.")
+	// --open: Just start the server and open the browser to a specific campaign.
+	if *openCampaignName != "" {
+		campaignID, err := storage.GetOrCreateCampaign(*openCampaignName)
+		if err != nil {
+			log.Fatalf("Error finding campaign: %v", err)
+		}
+		fmt.Printf("✅ Opening Campaign: '%s' (ID: %d)\n", *openCampaignName, campaignID)
+		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID))
 		return
 	}
-	fmt.Printf("🔎 Found %d Nmap files and %d Pcap files.\n", len(xmlFiles), len(pcapFiles))
 
-	// --- 6. Parse, Process, and Enrich All Data ---
-	masterMap, globalSummary := processFiles(xmlFiles, pcapFiles)
-
-	// --- 7. Save Results to Database ---
-	fmt.Println("\n--- Saving results to database ---")
-	if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
-		log.Fatalf("FATAL: Could not save results to database: %v", err)
-	}
-	fmt.Println("✅ Scan results saved successfully.")
-
-	// --- 8. Print Console Report ---
-	fmt.Println("\n--- Generating Console Report ---")
-	printConsoleReport(masterMap, globalSummary)
-	fmt.Println("\n✅ Console report generated.")
+	// Default (no flags): Just launch the server and the main campaign list page.
+	fmt.Println("✅ No specific campaign requested. Starting server...")
+	launchServerAndBrowser("http://localhost:8080/")
 }
 
 // processFiles handles the core logic of parsing and enrichment.
@@ -416,17 +390,7 @@ func handleListCampaigns() {
 	}
 }
 
-// handleOpenCampaign finds a campaign and launches the web UI immediately.
-func handleOpenCampaign(name string) {
-	campaignID, err := storage.GetOrCreateCampaign(name)
-	if err != nil {
-		log.Fatalf("Error finding campaign: %v", err)
-	}
-	fmt.Printf("✅ Opening Campaign: '%s' (ID: %d)\n", name, campaignID)
-	launchServerAndBrowser(campaignID)
-}
-
-// handleScanCampaign performs the full scan, save, and then launch workflow.
+// handleScanCampaign performs the full scan and then calls the blocking server/browser launcher.
 func handleScanCampaign(name string) {
 	campaignID, err := storage.GetOrCreateCampaign(name)
 	if err != nil {
@@ -442,33 +406,28 @@ func handleScanCampaign(name string) {
 		fmt.Println("No new data files found in ./data directory. Launching UI with existing data.")
 	} else {
 		fmt.Printf("🔎 Found %d Nmap files and %d Pcap files.\n", len(xmlFiles), len(pcapFiles))
-
-		// --- THIS IS THE CORRECT ORDER ---
-		// 1. Process all the files first
 		masterMap, globalSummary := processFiles(xmlFiles, pcapFiles)
-
-		// 2. Save the results to the database
 		fmt.Println("\n--- Saving results to database ---")
 		if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
 			log.Fatalf("FATAL: Could not save results to database: %v", err)
 		}
 		fmt.Println("✅ Scan results saved successfully.")
-
-		// 3. Print the console report
 		fmt.Println("\n--- Generating Console Report ---")
 		printConsoleReport(masterMap, globalSummary)
 		fmt.Println("\n✅ Console report generated.")
 	}
 
-	// 4. Launch the server and browser ONLY AFTER everything else is done.
-	launchServerAndBrowser(campaignID)
+	fmt.Println("\n✅ Scan complete. Starting server and opening browser...")
+	launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID))
 }
 
-// launchServerAndBrowser is a new helper function to avoid repeating code.
-func launchServerAndBrowser(campaignID int64) {
-	go functions.StartServer(campaignID)
-	browser.OpenURL("http://localhost:8080")
-	// Keep the main thread alive so the server can run
+// launchServerAndBrowser starts the server in a goroutine and opens a URL.
+// It then blocks forever to keep the main program alive.
+func launchServerAndBrowser(url string) {
+	go functions.StartServer()
+	if url != "" {
+		browser.OpenURL(url)
+	}
 	select {}
 }
 
@@ -560,8 +519,6 @@ func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *mo
 				ssid = ap.Wifi.SSID
 			}
 
-			// Concatenate the raw data of all EAPOL packets for this session.
-			// This is the real handshake data.
 			var realHandshakeData []byte
 			for _, pkt := range packets {
 				if eapolLayer := pkt.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
@@ -577,7 +534,7 @@ func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *mo
 				APMAC:          strings.ToUpper(apMAC),
 				SSID:           ssid,
 				PcapFile:       pcapFile,
-				HCCAPX:         realHandshakeData, // <-- Now using the real data
+				HCCAPX:         realHandshakeData,
 				HandshakeState: state,
 			})
 		}

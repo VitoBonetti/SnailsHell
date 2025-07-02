@@ -49,14 +49,14 @@
                     <div class="summary-card">
                         <div class="icon text-primary"><i class="bi bi-hdd-stack"></i></div>
                         <h5>{{ .Summary.TotalHosts }}</h5>
-                        <p class="text-secondary">Total Hosts</p>
+                        <div class="text-secondary">Total Hosts</div>
                     </div>
                 </div>
                 <div class="col-md-1">
                     <div class="summary-card">
                         <div class="icon text-success"><i class="bi bi-wifi"></i></div>
                         <h5>{{ .Summary.HostsUp }}</h5>
-                        <p class="text-secondary">Hosts Up</p>
+                        <div class="text-secondary">Hosts Up</div>
                     </div>
                 </div>
                 <div class="col-md-1">
@@ -73,21 +73,20 @@
                         <div class="text-secondary">Vulnerabilities</div>
                     </div>
                 </div>
-
                 <div class="col-md-1">
                     <div class="summary-card">
                         <div class="icon" style="color: #6f42c1;"><i class="bi bi-key-fill"></i></div>
                         <h5>{{ .Summary.CapturedHandshakesCount }}</h5>
-                        <div class="text-secondary"><a href="/handshakes" class="text-secondary"  title="View Details">Handshakes</a></div>
+                        <div class="text-secondary"><a href="/campaign/{{.Campaign.ID}}/handshakes" class="text-secondary">Handshakes</a></div>
                     </div>
                 </div>
-                <div class="col-md-6">
-                    <div class="summary-card align-items-end">
-                         <div class="icon text-primary"><i class="bi bi-door-open"></i></div>
+                <div class="col-md-7">
+                    <div class="summary-card">
+                         <div class="icon text-info"><i class="bi bi-door-open"></i></div>
                          <h5>Most Common Ports</h5>
                          <p class="text-secondary">
                             {{range .Summary.MostCommonPorts}}
-                                <span class="badge bg-primary me-1">{{.}}</span>
+                                <span class="badge bg-info me-1">{{.}}</span>
                             {{else}}
                                 No open ports found.
                             {{end}}
@@ -107,15 +106,19 @@
     </div>
 
     <script>
-        function switchCampaign(campaignId) {
-            window.location.href = `/?campaign_id=${campaignId}`;
+        // Get the campaign ID from the template to use in API calls
+        const campaignId = '{{ .Campaign.ID }}';
+
+        function switchCampaign(newCampaignId) {
+            window.location.href = `/campaign/${newCampaignId}/`;
         }
 
         const hostsContainer = document.getElementById('hosts-container');
         const paginationControls = document.getElementById('pagination-controls');
 
         function loadPage(page) {
-            fetch(`/api/hosts?page=${page}`)
+            // CORRECTED Fetch URL
+            fetch(`/api/campaign/${campaignId}/hosts?page=${page}`)
                 .then(response => response.json())
                 .then(data => {
                     hostsContainer.innerHTML = ''; // Clear previous content
@@ -124,8 +127,9 @@
                         data.hosts.forEach(host => {
                             const col = document.createElement('div');
                             col.className = 'col-md-4';
+                            // CORRECTED onclick handler to build the right URL
                             col.innerHTML = `
-                                <div class="host-card p-3" onclick="window.location='/hosts/${host.id}'">
+                                <div class="host-card p-3" onclick="window.location='/campaign/${campaignId}/hosts/${host.id}'">
                                     <div class="d-flex justify-content-between align-items-center">
                                         <h5 class="mb-0">${host.mac_address}</h5>
                                         <span class="badge ${host.status === 'up' ? 'bg-success' : 'bg-danger'}">${host.status}</span>
@@ -152,13 +156,11 @@
             paginationControls.innerHTML = '';
             if (totalPages <= 1) return;
 
-            // Previous button
             const prevLi = document.createElement('li');
             prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
             prevLi.innerHTML = `<a class="page-link" href="#" onclick="event.preventDefault(); loadPage(${currentPage - 1});">Previous</a>`;
             paginationControls.appendChild(prevLi);
 
-            // Page number buttons
             for (let i = 1; i <= totalPages; i++) {
                 const pageLi = document.createElement('li');
                 pageLi.className = `page-item ${i === currentPage ? 'active' : ''}`;
@@ -166,14 +168,12 @@
                 paginationControls.appendChild(pageLi);
             }
 
-            // Next button
             const nextLi = document.createElement('li');
             nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
             nextLi.innerHTML = `<a class="page-link" href="#" onclick="event.preventDefault(); loadPage(${currentPage + 1});">Next</a>`;
             paginationControls.appendChild(nextLi);
         }
 
-        // Initial load
         document.addEventListener('DOMContentLoaded', () => loadPage(1));
     </script>
 </body>

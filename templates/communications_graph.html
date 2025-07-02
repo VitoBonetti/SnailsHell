@@ -38,9 +38,10 @@
             const container = document.getElementById('network');
             const loadingDiv = document.getElementById('loading');
             const hostId = '{{ .HostID }}'; // Get the host ID from the Go template
+            const campaignId = '{{ .CampaignID }}'
 
             // Fetch data from our new API endpoint
-            fetch(`/api/hosts/${hostId}/communications`)
+            fetch(`/api/campaign/${campaignId}/hosts/${hostId}/communications`)
                 .then(response => response.json())
                 .then(data => {
                     loadingDiv.style.display = 'none'; // Hide loading message
