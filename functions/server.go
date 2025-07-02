@@ -21,6 +21,13 @@ func StartServer(campaignID int64) {
 		"replace": func(input, from, to string) string {
 			return strings.ReplaceAll(input, from, to)
 		},
+		// NEW: Add these functions for pagination logic in the template
+		"add": func(a, b int) int {
+			return a + b
+		},
+		"makeSlice": func(n int) []struct{} {
+			return make([]struct{}, n)
+		},
 	})
 
 	// Tell Gin where to find all template files.
@@ -197,6 +204,42 @@ func StartServer(campaignID int64) {
 		c.JSON(http.StatusOK, gin.H{
 			"nodes": nodes,
 			"edges": edges,
+		})
+	})
+
+	// NEW: Route for the handshakes page
+	router.GET("/handshakes", func(c *gin.Context) {
+		// 1. Get the requested page number from the URL, default to page 1
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		if page < 1 {
+			page = 1
+		}
+
+		// 2. Set the number of items per page
+		const pageSize = 10
+		offset := (page - 1) * pageSize
+
+		// 3. Get the total number of handshakes to calculate total pages
+		totalHandshakes, err := storage.CountHandshakesByCampaign(campaignID)
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Could not count handshakes.")
+			return
+		}
+		totalPages := (totalHandshakes + pageSize - 1) / pageSize
+
+		// 4. Get the paginated handshake data
+		handshakes, err := storage.GetHandshakesByCampaignPaginated(campaignID, pageSize, offset)
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Could not load handshakes.")
+			return
+		}
+
+		// 5. Pass all the data to the template
+		c.HTML(http.StatusOK, "handshakes.html", gin.H{
+			"Handshakes":  handshakes,
+			"CampaignID":  campaignID,
+			"TotalPages":  totalPages,
+			"CurrentPage": page,
 		})
 	})
 

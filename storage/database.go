@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"gonetmap/model"
 	"strings"
@@ -525,4 +526,47 @@ func GetDashboardSummary(campaignID int64) (*DashboardSummary, error) {
 	}
 
 	return summary, nil
+}
+
+// NEW: HandshakeInfo is a struct for displaying handshakes in the UI.
+type HandshakeInfo struct {
+	ID        int64
+	APMAC     string
+	ClientMAC string
+	SSID      string
+	PcapFile  string
+	HCCAPX    string // The hex-encoded data for display
+}
+
+// NEW: CountHandshakesByCampaign returns the total number of handshakes for a campaign.
+func CountHandshakesByCampaign(campaignID int64) (int, error) {
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM handshakes WHERE campaign_id = ?", campaignID).Scan(&count)
+	return count, err
+}
+
+// RENAMED & UPDATED: This function is now paginated.
+func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]HandshakeInfo, error) {
+	rows, err := DB.Query(`
+		SELECT id, ap_mac, client_mac, ssid, pcap_file, hccapx_data
+		FROM handshakes
+		WHERE campaign_id = ?
+		ORDER BY id DESC
+		LIMIT ? OFFSET ?`, campaignID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var handshakes []HandshakeInfo
+	for rows.Next() {
+		var h HandshakeInfo
+		var hccapxData []byte
+		if err := rows.Scan(&h.ID, &h.APMAC, &h.ClientMAC, &h.SSID, &h.PcapFile, &hccapxData); err != nil {
+			return nil, err
+		}
+		h.HCCAPX = hex.EncodeToString(hccapxData)
+		handshakes = append(handshakes, h)
+	}
+	return handshakes, nil
 }

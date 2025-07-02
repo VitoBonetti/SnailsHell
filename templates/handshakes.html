@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Captured Handshakes</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f0f2f5; }
+        .handshake-card {
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+            margin-bottom: 1.5rem;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        .hccapx-data {
+            word-wrap: break-word;
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h2 class="mb-0"><i class="bi bi-key-fill me-2"></i> Captured Handshakes</h2>
+                <p class="text-muted">WPA/WPA2 handshakes captured during the scan.</p>
+            </div>
+            <a href="/?campaign_id={{.CampaignID}}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Dashboard</a>
+        </div>
+
+        {{if .Handshakes}}
+            {{range .Handshakes}}
+            <div class="handshake-card p-4">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5>SSID: <span class="text-primary">{{.SSID}}</span></h5>
+                        <ul class="list-unstyled">
+                            <li><strong>Access Point MAC:</strong> {{.APMAC}}</li>
+                            <li><strong>Client MAC:</strong> {{.ClientMAC}}</li>
+                            <li><strong>Found in Pcap:</strong> {{.PcapFile}}</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <strong>HCCAPX Data (Hex):</strong>
+                        <div class="d-flex align-items-start mt-2">
+                            <div id="hccapx-{{.ID}}" class="hccapx-data flex-grow-1">{{.HCCAPX}}</div>
+                            <button class="btn btn-sm btn-outline-secondary ms-2" onclick="copyToClipboard('hccapx-{{.ID}}', this)">
+                                <i class="bi bi-clipboard"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {{end}}
+        {{else}}
+            <div class="text-center p-5 details-card">
+                <h3>No Handshakes Found</h3>
+                <p class="text-muted">No WPA/WPA2 handshakes were captured for this campaign.</p>
+            </div>
+        {{end}}
+
+        <nav class="mt-4" aria-label="Page navigation">
+            <ul class="pagination justify-content-center">
+                <li class="page-item {{if eq .CurrentPage 1}}disabled{{end}}">
+                    <a class="page-link" href="/handshakes?page={{.CurrentPage | add -1}}">Previous</a>
+                </li>
+
+                {{range $i, $e := makeSlice .TotalPages}}
+                    <li class="page-item {{if eq (add $i 1) $.CurrentPage}}active{{end}}">
+                        <a class="page-link" href="/handshakes?page={{add $i 1}}">{{add $i 1}}</a>
+                    </li>
+                {{end}}
+
+                <li class="page-item {{if eq .CurrentPage .TotalPages}}disabled{{end}}">
+                    <a class="page-link" href="/handshakes?page={{.CurrentPage | add 1}}">Next</a>
+                </li>
+            </ul>
+        </nav>
+        
+    </div>
+
+    <script>
+        function copyToClipboard(elementId, button) {
+            const textToCopy = document.getElementById(elementId).innerText;
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                // Provide user feedback
+                const originalIcon = button.innerHTML;
+                button.innerHTML = '<i class="bi bi-check-lg"></i>';
+                setTimeout(() => {
+                    button.innerHTML = originalIcon;
+                }, 2000); // Revert after 2 seconds
+            }).catch(err => {
+                console.error('Failed to copy text: ', err);
+            });
+        }
+    </script>
+</body>
+</html>
