@@ -8,6 +8,7 @@
     <style>
         body { background-color: #111827; color: #d1d5db; }
         .card { background-color: #1f2937; border: 1px solid #374151; }
+        .modal-backdrop { background-color: rgba(0, 0, 0, 0.5); }
     </style>
 </head>
 <body class="font-sans">
@@ -20,13 +21,18 @@
         </div>
 
         <!-- Campaign List -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div id="campaign-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {{if .Campaigns}}
                 {{range .Campaigns}}
-                <a href="/campaign/{{.ID}}" class="block card rounded-lg p-6 hover:bg-gray-700 hover:border-blue-500 transition duration-200">
-                    <h2 class="text-xl font-bold text-white truncate">{{.Name}}</h2>
-                    <p class="text-sm text-gray-400 mt-1">Created: {{.CreatedAt.Format "Jan 02, 2006 15:04:05"}}</p>
-                </a>
+                <div id="campaign-card-{{.ID}}" class="card rounded-lg p-6 flex flex-col justify-between hover:border-blue-500 transition duration-200">
+                    <a href="/campaign/{{.ID}}" class="block flex-grow">
+                        <h2 class="text-xl font-bold text-white truncate">{{.Name}}</h2>
+                        <p class="text-sm text-gray-400 mt-1">Created: {{.CreatedAt.Format "Jan 02, 2006 15:04:05"}}</p>
+                    </a>
+                    <div class="mt-4 text-right">
+                        <button onclick="openDeleteModal({{.ID}}, '{{.Name}}')" class="text-sm text-red-500 hover:text-red-400 font-semibold">Delete</button>
+                    </div>
+                </div>
                 {{end}}
             {{else}}
                 <div class="card col-span-full rounded-lg p-8 text-center">
@@ -37,5 +43,66 @@
         </div>
     </div>
 
+    <!-- Delete Confirmation Modal -->
+    <div id="delete-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
+            <div class="p-6">
+                <h3 class="text-xl font-bold text-white">Confirm Deletion</h3>
+                <p class="mt-2 text-gray-300">Are you sure you want to delete the campaign "<span id="modal-campaign-name" class="font-bold"></span>"? This action cannot be undone.</p>
+            </div>
+            <div class="bg-gray-800 px-6 py-4 flex justify-end gap-4 rounded-b-lg">
+                <button onclick="closeDeleteModal()" class="px-4 py-2 text-sm font-medium text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-500">Cancel</button>
+                <button id="confirm-delete-btn" onclick="deleteCampaign()" class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-500">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const deleteModal = document.getElementById('delete-modal');
+        const modalCampaignName = document.getElementById('modal-campaign-name');
+        const confirmDeleteBtn = document.getElementById('confirm-delete-btn');
+        let campaignToDeleteId = null;
+
+        function openDeleteModal(id, name) {
+            campaignToDeleteId = id;
+            modalCampaignName.textContent = name;
+            deleteModal.classList.remove('hidden');
+            deleteModal.classList.add('flex');
+        }
+
+        function closeDeleteModal() {
+            deleteModal.classList.add('hidden');
+            deleteModal.classList.remove('flex');
+            campaignToDeleteId = null;
+        }
+
+        async function deleteCampaign() {
+            if (!campaignToDeleteId) return;
+
+            try {
+                const response = await fetch(`/api/campaigns/${campaignToDeleteId}`, {
+                    method: 'DELETE',
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to delete campaign');
+                }
+
+                // Remove the card from the UI
+                const card = document.getElementById(`campaign-card-${campaignToDeleteId}`);
+                if (card) {
+                    card.style.transition = 'opacity 0.5s ease';
+                    card.style.opacity = '0';
+                    setTimeout(() => card.remove(), 500);
+                }
+                
+            } catch (error) {
+                console.error('Deletion error:', error);
+                alert('Could not delete the campaign.');
+            } finally {
+                closeDeleteModal();
+            }
+        }
+    </script>
 </body>
 </html>

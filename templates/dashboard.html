@@ -33,7 +33,8 @@
             </div>
             <div class="mt-4 sm:mt-0 flex items-center gap-4">
                 <a href="/" class="text-blue-400 hover:text-blue-300">&larr; All Campaigns</a>
-                <select id="campaign-switcher" class="bg-gray-700 border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                <!-- FIX: Make the select dropdown larger -->
+                <select id="campaign-switcher" class="bg-gray-700 border-gray-600 text-white text-base rounded-lg focus:ring-blue-500 focus:border-blue-500 py-2.5">
                     <option>Switch Campaign...</option>
                     {{range .AllCampaigns}}
                         {{if ne .ID $.Campaign.ID}}
@@ -41,8 +42,7 @@
                         {{end}}
                     {{end}}
                 </select>
-                <!-- FIX: Update button text and link -->
-                <a href="/campaign/{{.Campaign.ID}}/report/zip" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-500">Export as ZIP</a>
+                <a href="/campaign/{{.Campaign.ID}}/report/zip" class="px-4 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-500">Export as ZIP</a>
             </div>
         </div>
 

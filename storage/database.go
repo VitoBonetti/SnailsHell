@@ -495,6 +495,17 @@ func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, fi
 	return hosts, totalHosts, nil
 }
 
+// NEW: DeleteCampaignByID deletes a campaign and all its associated data.
+func DeleteCampaignByID(id int64) error {
+	// Because of "ON DELETE CASCADE" in the schema, deleting a campaign
+	// will automatically delete all related records in other tables.
+	_, err := DB.Exec("DELETE FROM campaigns WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("could not delete campaign with id %d: %w", id, err)
+	}
+	return nil
+}
+
 func GetAllHostsForReport(campaignID int64) ([]ReportHostInfo, error) {
 	query := `
         SELECT
@@ -610,7 +621,6 @@ func GetAllDNSForReport(campaignID int64) ([][]string, error) {
 	return results, nil
 }
 
-// FIX: This function now returns the correct type from the model package.
 func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]model.ReportHandshakeInfo, error) {
 	rows, err := DB.Query(`
 		SELECT id, ap_mac, client_mac, ssid, pcap_file, hccapx_data

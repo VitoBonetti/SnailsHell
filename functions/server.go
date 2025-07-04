@@ -19,7 +19,6 @@ func StartServer(embeddedTemplates embed.FS) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
-	// Define all custom functions for the templates to use.
 	funcMap := template.FuncMap{
 		"replace": func(input, from, to string) string {
 			return strings.ReplaceAll(input, from, to)
@@ -39,11 +38,9 @@ func StartServer(embeddedTemplates embed.FS) {
 		},
 	}
 
-	// Parse the templates from the passed-in filesystem.
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(embeddedTemplates, "templates/*.html"))
 	router.SetHTMLTemplate(tmpl)
 
-	// --- Route for the home page (lists all campaigns) ---
 	router.GET("/", func(c *gin.Context) {
 		campaigns, err := storage.ListCampaigns()
 		if err != nil {
@@ -55,10 +52,22 @@ func StartServer(embeddedTemplates embed.FS) {
 		})
 	})
 
-	// --- Group all campaign-specific page routes ---
+	// NEW: API route for deleting a campaign
+	router.DELETE("/api/campaigns/:campaignID", func(c *gin.Context) {
+		campaignID, err := strconv.ParseInt(c.Param("campaignID"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid campaign ID"})
+			return
+		}
+		if err := storage.DeleteCampaignByID(campaignID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete campaign"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Campaign deleted successfully"})
+	})
+
 	campaignRoutes := router.Group("/campaign/:campaignID")
 	{
-		// Dashboard Page
 		campaignRoutes.GET("/", func(c *gin.Context) {
 			campaignID, _ := strconv.ParseInt(c.Param("campaignID"), 10, 64)
 			campaign, err := storage.GetCampaignByID(campaignID)
@@ -84,7 +93,6 @@ func StartServer(embeddedTemplates embed.FS) {
 			})
 		})
 
-		// Host Detail Page
 		campaignRoutes.GET("/hosts/:id", func(c *gin.Context) {
 			campaignID, _ := strconv.ParseInt(c.Param("campaignID"), 10, 64)
 			hostID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -99,7 +107,6 @@ func StartServer(embeddedTemplates embed.FS) {
 			})
 		})
 
-		// Handshakes Page (Paginated)
 		campaignRoutes.GET("/handshakes", func(c *gin.Context) {
 			campaignID, _ := strconv.ParseInt(c.Param("campaignID"), 10, 64)
 			campaign, err := storage.GetCampaignByID(campaignID)
@@ -137,7 +144,6 @@ func StartServer(embeddedTemplates embed.FS) {
 			})
 		})
 
-		// Route for report download
 		campaignRoutes.GET("/report/zip", func(c *gin.Context) {
 			campaignID, _ := strconv.ParseInt(c.Param("campaignID"), 10, 64)
 			campaign, err := storage.GetCampaignByID(campaignID)
@@ -158,10 +164,8 @@ func StartServer(embeddedTemplates embed.FS) {
 		})
 	}
 
-	// --- Group all campaign-specific API endpoints ---
 	apiRoutes := router.Group("/api/campaign/:campaignID")
 	{
-		// API: Get Hosts for Dashboard with Search and Filter
 		apiRoutes.GET("/hosts", func(c *gin.Context) {
 			campaignID, _ := strconv.ParseInt(c.Param("campaignID"), 10, 64)
 			page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -192,7 +196,6 @@ func StartServer(embeddedTemplates embed.FS) {
 			})
 		})
 
-		// API: Get Communications for Graph
 		apiRoutes.GET("/hosts/:id/communications", func(c *gin.Context) {
 			hostID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 			campaignID, _ := strconv.ParseInt(c.Param("campaignID"), 10, 64)
