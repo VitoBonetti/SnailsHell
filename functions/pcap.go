@@ -1,9 +1,9 @@
 package functions
 
 import (
-	"bytes"
 	"fmt"
 	"gonetmap/model"
+	"net"
 	"strings"
 
 	"github.com/google/gopacket"
@@ -11,218 +11,196 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-// (The main EnrichData function is unchanged)
-func EnrichData(filename string, networkMap *model.NetworkMap, summary *model.PcapSummary, eapolTracker map[string][]gopacket.Packet, packetSources map[gopacket.Packet]string) error {
-	handle, err := pcap.OpenOffline(filename)
+// EnrichData opens a pcap file and processes its packets.
+func EnrichData(file string, networkMap *model.NetworkMap, summary *model.PcapSummary) error {
+	handle, err := pcap.OpenOffline(file)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not open pcap file %s: %w", file, err)
 	}
 	defer handle.Close()
 
-	fmt.Printf("  -> Performing full pcap analysis on %s...\n", filename)
-
-	ipToHostKey := make(map[string]string)
-	for key, host := range networkMap.Hosts {
-		for ip := range host.IPv4Addresses {
-			ipToHostKey[ip] = key
-		}
-	}
-
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for packet := range packetSource.Packets() {
-		// Keep track of which file this packet came from
-		packetSources[packet] = filename
-
-		updateGlobalSummary(packet, summary, networkMap)
-		enrichHostIPData(packet, networkMap, ipToHostKey)
-		enrichHostWifiData(packet, networkMap, eapolTracker)
-		enrichHostBehavior(packet, networkMap, ipToHostKey)
-		enrichHostDNS(packet, networkMap, ipToHostKey)
+		ProcessPacket(packet, networkMap, summary, file)
 	}
 	return nil
 }
 
-func enrichHostDNS(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
-	udpLayer := packet.Layer(layers.LayerTypeUDP)
-	if udpLayer == nil {
-		return
-	}
-	udp, _ := udpLayer.(*layers.UDP)
+// ProcessPacket contains the core logic for analyzing a single packet.
+func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary *model.PcapSummary, sourceName string) {
+	// --- Global Summary Processing ---
+	summary.TotalPackets++
 
-	if udp.DstPort != 53 {
-		return
-	}
-
-	dnsPacket := gopacket.NewPacket(udp.Payload, layers.LayerTypeDNS, gopacket.Default)
-	if dnsLayer := dnsPacket.Layer(layers.LayerTypeDNS); dnsLayer != nil {
-		dns, _ := dnsLayer.(*layers.DNS)
-
-		if dns.QR {
-			return
-		}
-
-		ipLayer := packet.Layer(layers.LayerTypeIPv4)
-		if ipLayer == nil {
-			return
-		}
-		ip, _ := ipLayer.(*layers.IPv4)
-
-		sourceKey, found := ipToKey[ip.SrcIP.String()]
-		if !found {
-			return
-		}
-		host := networkMap.Hosts[sourceKey]
-
-		for _, q := range dns.Questions {
-			host.DNSLookups[string(q.Name)] = true
-		}
-	}
-}
-
-func updateGlobalSummary(packet gopacket.Packet, summary *model.PcapSummary, networkMap *model.NetworkMap) {
 	for _, layer := range packet.Layers() {
 		summary.ProtocolCounts[layer.LayerType().String()]++
 	}
 
-	if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
-		dot11, _ := dot11Layer.(*layers.Dot11)
-		sourceMAC := strings.ToUpper(dot11.Address2.String())
-
-		if _, known := networkMap.Hosts[sourceMAC]; !known && sourceMAC != "00:00:00:00:00:00" && sourceMAC != "" {
-			if _, exists := summary.UnidentifiedMACs[sourceMAC]; !exists {
-				summary.UnidentifiedMACs[sourceMAC] = ""
-			}
-		}
-
-		if dot11.Type == layers.Dot11TypeMgmtBeacon {
-			if ssid, err := getSSIDFromDot11(dot11); err == nil && ssid != "" && ssid != "<hidden or broadcast>" {
-				if _, ok := summary.AdvertisedAPs[ssid]; !ok {
-					summary.AdvertisedAPs[ssid] = make(map[string]bool)
-				}
-				summary.AdvertisedAPs[ssid][sourceMAC] = true
-			}
-		}
-
-		if dot11.Type == layers.Dot11TypeMgmtProbeReq {
-			if ssid, err := getSSIDFromDot11(dot11); err == nil && ssid != "" && ssid != "<hidden or broadcast>" {
-				if _, ok := summary.AllProbeRequests[ssid]; !ok {
-					summary.AllProbeRequests[ssid] = make(map[string]bool)
-				}
-				summary.AllProbeRequests[ssid][sourceMAC] = true
-			}
-		}
-	}
-}
-
-func enrichHostIPData(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
-	ipLayer := packet.Layer(layers.LayerTypeIPv4)
-	if ipLayer == nil {
-		return
-	}
-	ip, _ := ipLayer.(*layers.IPv4)
-	sourceKey, found := ipToKey[ip.SrcIP.String()]
-	if !found {
-		return
-	}
-	host := networkMap.Hosts[sourceKey]
-	comm, ok := host.Communications[ip.DstIP.String()]
-	if !ok {
-		comm = &model.Communication{CounterpartIP: ip.DstIP.String(), PacketCount: 0, Protocols: make(map[string]int)}
-		host.Communications[ip.DstIP.String()] = comm
-	}
-	comm.PacketCount++
-	comm.Protocols[ip.Protocol.String()]++
-}
-
-// This function now just collects EAPOL packets, it does not determine state.
-func enrichHostWifiData(packet gopacket.Packet, networkMap *model.NetworkMap, eapolTracker map[string][]gopacket.Packet) {
+	// --- Wi-Fi Specific Processing (802.11) ---
 	dot11Layer := packet.Layer(layers.LayerTypeDot11)
-	if dot11Layer == nil {
+	if dot11Layer != nil {
+		dot11, _ := dot11Layer.(*layers.Dot11)
+
+		// Management Frames (Beacons, Probes)
+		var mgmtPayload []byte
+		if beaconLayer := packet.Layer(layers.LayerTypeDot11MgmtBeacon); beaconLayer != nil {
+			mgmtPayload = beaconLayer.LayerPayload()
+			ssid := getSSIDFromPayload(mgmtPayload)
+			if _, ok := summary.AdvertisedAPs[ssid]; !ok {
+				summary.AdvertisedAPs[ssid] = make(map[string]bool)
+			}
+			summary.AdvertisedAPs[ssid][dot11.Address2.String()] = true
+		} else if probeRespLayer := packet.Layer(layers.LayerTypeDot11MgmtProbeResp); probeRespLayer != nil {
+			mgmtPayload = probeRespLayer.LayerPayload()
+			ssid := getSSIDFromPayload(mgmtPayload)
+			if _, ok := summary.AdvertisedAPs[ssid]; !ok {
+				summary.AdvertisedAPs[ssid] = make(map[string]bool)
+			}
+			summary.AdvertisedAPs[ssid][dot11.Address2.String()] = true
+		} else if probeReqLayer := packet.Layer(layers.LayerTypeDot11MgmtProbeReq); probeReqLayer != nil {
+			mgmtPayload = probeReqLayer.LayerPayload()
+			ssid := getSSIDFromPayload(mgmtPayload)
+			if _, ok := summary.AllProbeRequests[ssid]; !ok {
+				summary.AllProbeRequests[ssid] = make(map[string]bool)
+			}
+			summary.AllProbeRequests[ssid][dot11.Address2.String()] = true
+		}
+	}
+
+	// --- Ethernet and IP Layer Processing ---
+	var srcMAC, dstMAC, srcIP, dstIP string
+
+	if ethLayer := packet.Layer(layers.LayerTypeEthernet); ethLayer != nil {
+		eth, _ := ethLayer.(*layers.Ethernet)
+		srcMAC = eth.SrcMAC.String()
+		dstMAC = eth.DstMAC.String()
+	}
+
+	// For Wi-Fi data frames, get MACs from the Dot11 layer addresses
+	if dot11Layer != nil && (packet.Layer(layers.LayerTypeIPv4) != nil || packet.Layer(layers.LayerTypeIPv6) != nil) {
+		dot11, _ := dot11Layer.(*layers.Dot11)
+		// Logic to determine direction and assign MACs based on ToDS/FromDS flags
+		switch {
+		case dot11.Flags.ToDS() && !dot11.Flags.FromDS(): // From client to AP
+			srcMAC = dot11.Address2.String()
+			dstMAC = dot11.Address1.String()
+		case !dot11.Flags.ToDS() && dot11.Flags.FromDS(): // From AP to client
+			srcMAC = dot11.Address1.String()
+			dstMAC = dot11.Address2.String()
+		}
+	}
+
+	if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
+		ip, _ := ipLayer.(*layers.IPv4)
+		srcIP = ip.SrcIP.String()
+		dstIP = ip.DstIP.String()
+	} else if ipLayer := packet.Layer(layers.LayerTypeIPv6); ipLayer != nil {
+		ip, _ := ipLayer.(*layers.IPv6)
+		srcIP = ip.SrcIP.String()
+		dstIP = ip.DstIP.String()
+	}
+
+	if srcIP == "" || dstIP == "" {
 		return
 	}
-	dot11, _ := dot11Layer.(*layers.Dot11)
+
+	// --- Host-Centric Enrichment ---
+	srcIsLocal := isPrivateIP(net.ParseIP(srcIP))
+	dstIsLocal := isPrivateIP(net.ParseIP(dstIP))
+
+	if !srcIsLocal && !dstIsLocal {
+		return
+	}
+
+	var localMAC, localIP, remoteIP string
+	if srcIsLocal {
+		localMAC, localIP, remoteIP = srcMAC, srcIP, dstIP
+	} else {
+		localMAC, localIP, remoteIP = dstMAC, dstIP, srcIP
+	}
+
+	if localMAC == "" {
+		return
+	}
+
+	host, found := networkMap.Hosts[strings.ToUpper(localMAC)]
+	if !found {
+		host = model.NewHost(strings.ToUpper(localMAC))
+		host.DiscoveredBy = "Pcap"
+		networkMap.Hosts[strings.ToUpper(localMAC)] = host
+	}
+	host.IPv4Addresses[localIP] = true
+
+	if _, ok := host.Communications[remoteIP]; !ok {
+		host.Communications[remoteIP] = &model.Communication{CounterpartIP: remoteIP}
+	}
+	host.Communications[remoteIP].PacketCount++
+
+	if dnsLayer := packet.Layer(layers.LayerTypeDNS); dnsLayer != nil {
+		dns, _ := dnsLayer.(*layers.DNS)
+		if dns.QR == false { // This is a query
+			for _, q := range dns.Questions {
+				host.DNSLookups[string(q.Name)] = true
+			}
+		}
+	}
 
 	if eapolLayer := packet.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
-		addr1 := strings.ToUpper(dot11.Address1.String())
-		addr2 := strings.ToUpper(dot11.Address2.String())
-		addr3 := strings.ToUpper(dot11.Address3.String())
-
-		var clientMAC, apMAC string
-
-		// Determine client and AP based on ToDS/FromDS flags
-		if dot11.Flags.ToDS() && !dot11.Flags.FromDS() {
-			clientMAC = addr2
-			apMAC = addr1
-		} else if !dot11.Flags.ToDS() && dot11.Flags.FromDS() {
-			clientMAC = addr1
-			apMAC = addr2
-		} else {
-			// Could be management frames or other traffic, use Address 2 as a default key
-			clientMAC = addr2
-			apMAC = addr3
-		}
-
-		if clientMAC != "" && apMAC != "" {
-			// Create a consistent key for the session by sorting MACs
-			var key string
-			if clientMAC < apMAC {
-				key = fmt.Sprintf("%s-%s", clientMAC, apMAC)
-			} else {
-				key = fmt.Sprintf("%s-%s", apMAC, clientMAC)
-			}
-			// Store the entire EAPOL packet for later analysis
-			eapolTracker[key] = append(eapolTracker[key], packet)
+		sessionKey := getSessionKey(packet)
+		if sessionKey != "" {
+			summary.EapolTracker[sessionKey] = append(summary.EapolTracker[sessionKey], packet)
+			summary.PacketSources[packet] = sourceName
 		}
 	}
 }
 
-func enrichHostBehavior(packet gopacket.Packet, networkMap *model.NetworkMap, ipToKey map[string]string) {
-	ipLayer := packet.Layer(layers.LayerTypeIPv4)
-	if ipLayer == nil {
-		return
-	}
-	ip, _ := ipLayer.(*layers.IPv4)
-	sourceKey, found := ipToKey[ip.SrcIP.String()]
-	if !found {
-		return
-	}
-	host := networkMap.Hosts[sourceKey]
-	if host.Fingerprint == nil {
-		return
-	}
-	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
-		udp, _ := udpLayer.(*layers.UDP)
-		if udp.DstPort == 1900 {
-			host.Fingerprint.BehavioralClues["Likely Media Device (SSDP/UPnP traffic)"] = true
-		}
-		if udp.DstPort == 5353 {
-			host.Fingerprint.BehavioralClues["Service Discovery traffic detected (mDNS/Bonjour)"] = true
-		}
-	}
-	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
-		tcp, _ := tcpLayer.(*layers.TCP)
-		if tcp.DstPort == 445 {
-			host.Fingerprint.BehavioralClues["Windows File Sharing or NAS detected (SMB traffic)"] = true
-		}
-	}
-}
+// --- Helper Functions ---
 
-func getSSIDFromDot11(dot11 *layers.Dot11) (string, error) {
-	payload := dot11.LayerPayload()
+// getSSIDFromPayload manually decodes Information Elements from a byte slice to find the SSID.
+func getSSIDFromPayload(payload []byte) string {
 	for len(payload) >= 2 {
 		id := layers.Dot11InformationElementID(payload[0])
 		length := int(payload[1])
+
 		if len(payload) < 2+length {
-			return "", fmt.Errorf("malformed IE")
+			return ""
 		}
+
 		if id == layers.Dot11InformationElementIDSSID {
-			info := payload[2 : 2+length]
-			if len(info) == 0 || (len(info) > 0 && bytes.Contains(info, []byte{0x00})) {
-				return "<hidden or broadcast>", nil
-			}
-			return string(info), nil
+			return string(payload[2 : 2+length])
 		}
+
 		payload = payload[2+length:]
 	}
-	return "", fmt.Errorf("SSID not found")
+	return ""
+}
+
+func getSessionKey(packet gopacket.Packet) string {
+	if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
+		dot11, _ := dot11Layer.(*layers.Dot11)
+		addr1 := dot11.Address1.String()
+		addr2 := dot11.Address2.String()
+		if strings.Compare(addr1, addr2) < 0 {
+			return addr1 + "-" + addr2
+		}
+		return addr2 + "-" + addr1
+	}
+	return ""
+}
+
+// isPrivateIP checks if an IP address is in a private range.
+func isPrivateIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	privateIPBlocks := []*net.IPNet{
+		{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(8, 32)},
+		{IP: net.ParseIP("172.16.0.0"), Mask: net.CIDRMask(12, 32)},
+		{IP: net.ParseIP("192.168.0.0"), Mask: net.CIDRMask(16, 32)},
+	}
+	for _, block := range privateIPBlocks {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

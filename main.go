@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -9,15 +10,16 @@ import (
 	"gonetmap/storage"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unicode"
 
-	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/pkg/browser"
 )
@@ -40,9 +42,35 @@ func main() {
 	listCampaigns := flag.Bool("list", false, "List all existing campaigns.")
 	dataDir := flag.String("dir", "./data", "Directory containing Nmap XML and Pcap files.")
 
+	// Flags for live capture
+	liveCapture := flag.Bool("live", false, "Enable live packet capture mode.")
+	iface := flag.String("iface", "", "Interface to capture packets from (use -live to see options).")
+
 	flag.Parse()
 
 	// --- 3. Handle different modes ---
+
+	// Live capture mode
+	if *liveCapture {
+		// FIX: If no interface is specified, the user just wants to see the list.
+		// This check must come BEFORE the campaign name check.
+		if *iface == "" {
+			if err := functions.ListInterfaces(); err != nil {
+				log.Fatalf("FATAL: Could not list network interfaces: %v", err)
+			}
+			return // Exit after listing interfaces
+		}
+
+		// If an interface IS specified, we now need a campaign name.
+		if *campaignName == "" {
+			log.Fatalf("FATAL: A campaign name is required when specifying an interface. Use the -campaign flag.")
+		}
+
+		// If we have both an interface and a campaign, start the capture.
+		handleLiveCapture(*campaignName, *iface)
+		return
+	}
+
 	if *listCampaigns {
 		handleListCampaigns()
 		return
@@ -67,41 +95,88 @@ func main() {
 	launchServerAndBrowser("http://localhost:8080/", templatesFS)
 }
 
+// handleLiveCapture orchestrates the real-time packet capture process.
+func handleLiveCapture(campaignName, interfaceName string) {
+	campaignID, err := storage.GetOrCreateCampaign(campaignName)
+	if err != nil {
+		log.Fatalf("Error handling campaign '%s': %v", campaignName, err)
+	}
+	fmt.Printf("✅ Operating on Campaign: '%s' (ID: %d)\n", campaignName, campaignID)
+
+	masterMap := model.NewNetworkMap()
+	globalSummary := model.NewPcapSummary()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		fmt.Printf("🚀 Starting live capture on interface '%s'. Press Ctrl+C to stop.\n", interfaceName)
+		if err := functions.StartLiveCapture(ctx, interfaceName, masterMap, globalSummary); err != nil {
+			log.Fatalf("FATAL: Could not start live capture: %v", err)
+		}
+	}()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+
+	fmt.Println("\n🛑 Stopping capture...")
+	cancel()
+	wg.Wait()
+	fmt.Println("✅ Capture stopped.")
+
+	fmt.Println("\n--- Finalizing data ---")
+	ProcessHandshakes(masterMap, globalSummary)
+	enrichWithLookups(masterMap, globalSummary)
+
+	fmt.Println("\n--- Saving results to database ---")
+	if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
+		log.Fatalf("FATAL: Could not save results to database: %v", err)
+	}
+	fmt.Println("✅ Scan results saved successfully.")
+
+	fmt.Println("\n--- Generating Console Report ---")
+	printConsoleReport(masterMap, globalSummary)
+	fmt.Println("\n✅ Console report generated.")
+
+	fmt.Println("\n✅ Scan complete. Starting server and opening browser...")
+	launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
+}
+
 // processFiles handles the core logic of parsing and enrichment concurrently.
 func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapSummary) {
 	masterMap := model.NewNetworkMap()
 	var mapMutex sync.Mutex
 
 	var wg sync.WaitGroup
-	// A buffered channel to collect errors from goroutines without blocking them.
 	errChan := make(chan error, len(xmlFiles)+len(pcapFiles))
 
 	var processedCount int32
 	totalFiles := int32(len(xmlFiles) + len(pcapFiles))
 	done := make(chan bool)
 
-	// Goroutine for showing progress
 	go func() {
 		for {
 			select {
 			case <-done:
 				return
 			default:
-				// \r moves the cursor to the beginning of the line so we can overwrite it.
 				fmt.Printf("\rProcessing files: %d/%d", atomic.LoadInt32(&processedCount), totalFiles)
 				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}()
 
-	// --- 1. Nmap Parsing (Concurrent) ---
 	if len(xmlFiles) > 0 {
 		fmt.Println("\n--- Parsing Nmap files ---")
 		for _, file := range xmlFiles {
 			wg.Add(1)
 			go func(filePath string) {
 				defer wg.Done()
-				defer atomic.AddInt32(&processedCount, 1) // Increment counter when done
+				defer atomic.AddInt32(&processedCount, 1)
 
 				tempMap := model.NewNetworkMap()
 				if err := functions.MergeFromFile(filePath, tempMap); err != nil {
@@ -119,11 +194,8 @@ func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapS
 		wg.Wait()
 	}
 
-	// --- 2. Pcap Enrichment (Concurrent) ---
 	globalSummary := model.NewPcapSummary()
-	eapolTracker := make(map[string][]gopacket.Packet)
-	packetSources := make(map[gopacket.Packet]string)
-	var pcapMutex sync.Mutex // Mutex for all pcap-related shared data structures.
+	var pcapMutex sync.Mutex
 
 	if len(pcapFiles) > 0 {
 		fmt.Println("\n--- Enriching with Pcap files ---")
@@ -131,12 +203,12 @@ func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapS
 			wg.Add(1)
 			go func(filePath string) {
 				defer wg.Done()
-				defer atomic.AddInt32(&processedCount, 1) // Increment counter when done
+				defer atomic.AddInt32(&processedCount, 1)
 
 				pcapMutex.Lock()
 				defer pcapMutex.Unlock()
 
-				if err := functions.EnrichData(filePath, masterMap, globalSummary, eapolTracker, packetSources); err != nil {
+				if err := functions.EnrichData(filePath, masterMap, globalSummary); err != nil {
 					errChan <- fmt.Errorf("could not process pcap file %s: %w", filePath, err)
 					return
 				}
@@ -145,8 +217,7 @@ func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapS
 		wg.Wait()
 	}
 
-	// --- 3. Cleanup and Error Reporting ---
-	done <- true // Stop the progress bar goroutine
+	done <- true
 	fmt.Printf("\rProcessing files: %d/%d... Done.\n", atomic.LoadInt32(&processedCount), totalFiles)
 
 	close(errChan)
@@ -164,12 +235,17 @@ func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapS
 
 	fmt.Printf("\n✅ File processing complete. Found %d unique hosts.\n\n", len(masterMap.Hosts))
 
-	// --- 4. Post-processing (Sequential) ---
-	ProcessHandshakes(eapolTracker, masterMap, globalSummary, packetSources)
+	ProcessHandshakes(masterMap, globalSummary)
+	enrichWithLookups(masterMap, globalSummary)
 
+	return masterMap, globalSummary
+}
+
+// enrichWithLookups performs GeoIP and MAC vendor lookups.
+func enrichWithLookups(networkMap *model.NetworkMap, summary *model.PcapSummary) {
 	fmt.Println("--- Performing Geolocation Lookups ---")
 	geoCache := make(map[string]*model.GeoInfo)
-	for _, host := range masterMap.Hosts {
+	for _, host := range networkMap.Hosts {
 		for _, comm := range host.Communications {
 			if geoInfo, found := geoCache[comm.CounterpartIP]; found {
 				comm.Geo = geoInfo
@@ -190,10 +266,10 @@ func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapS
 
 	fmt.Println("\n--- Performing Local MAC Vendor Lookups ---")
 	allMacsToLookup := make(map[string]string)
-	for mac := range globalSummary.UnidentifiedMACs {
+	for mac := range summary.UnidentifiedMACs {
 		allMacsToLookup[mac] = ""
 	}
-	for _, host := range masterMap.Hosts {
+	for _, host := range networkMap.Hosts {
 		if (host.Fingerprint == nil || host.Fingerprint.Vendor == "") && host.MACAddress != "" {
 			allMacsToLookup[host.MACAddress] = ""
 		}
@@ -211,22 +287,20 @@ func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapS
 			if vendor == "" {
 				continue
 			}
-			if host, ok := masterMap.Hosts[mac]; ok {
+			if host, ok := networkMap.Hosts[mac]; ok {
 				if host.Fingerprint == nil {
 					host.Fingerprint = &model.Fingerprint{}
 				}
 				host.Fingerprint.Vendor = vendor
 			}
-			if _, ok := globalSummary.UnidentifiedMACs[mac]; ok {
-				globalSummary.UnidentifiedMACs[mac] = vendor
+			if _, ok := summary.UnidentifiedMACs[mac]; ok {
+				summary.UnidentifiedMACs[mac] = vendor
 			}
 		}
 		fmt.Println("✅ Local MAC Vendor lookup complete.")
 	} else {
 		fmt.Println("No new MAC addresses to look up.")
 	}
-
-	return masterMap, globalSummary
 }
 
 // printConsoleReport contains all the logic for printing the final report.
@@ -470,9 +544,7 @@ func handleListCampaigns() {
 
 // handleScanCampaign performs the full scan and then calls the blocking server/browser launcher.
 func handleScanCampaign(name, dataDir string) {
-	// Trim quotes from the path which can be added by shells on Windows.
 	dataDir = strings.Trim(dataDir, "\"")
-	// Clean the directory path to handle issues like trailing slashes.
 	cleanDataDir := filepath.Clean(dataDir)
 
 	campaignID, err := storage.GetOrCreateCampaign(name)
@@ -483,7 +555,6 @@ func handleScanCampaign(name, dataDir string) {
 
 	xmlFiles, pcapFiles, err := findDataFiles(cleanDataDir)
 	if err != nil {
-		// This is a fatal error because the core input is invalid.
 		log.Fatalf("FATAL: Could not find data files: %v", err)
 	}
 	if len(xmlFiles) == 0 && len(pcapFiles) == 0 {
@@ -506,7 +577,6 @@ func handleScanCampaign(name, dataDir string) {
 }
 
 // launchServerAndBrowser starts the server in a goroutine and opens a URL.
-// It then blocks forever to keep the main program alive.
 func launchServerAndBrowser(url string, fs embed.FS) {
 	go functions.StartServer(fs)
 	if url != "" {
@@ -517,23 +587,20 @@ func launchServerAndBrowser(url string, fs embed.FS) {
 
 // findDataFiles scans a directory for relevant data files.
 func findDataFiles(rootDir string) (xmlFiles, pcapFiles []string, err error) {
-	// First, check if the provided directory exists and is a directory.
 	info, err := os.Stat(rootDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, fmt.Errorf("directory does not exist: %s", rootDir)
 		}
-		// Handle other potential errors from os.Stat, like permission errors
 		return nil, nil, fmt.Errorf("could not access directory %s: %w", rootDir, err)
 	}
 	if !info.IsDir() {
 		return nil, nil, fmt.Errorf("path is not a directory: %s", rootDir)
 	}
 
-	// If the directory is valid, walk through it.
 	walkErr := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err // An error from filepath.Walk itself.
+			return err
 		}
 		if !info.IsDir() {
 			ext := strings.ToLower(filepath.Ext(path))
@@ -553,8 +620,9 @@ func findDataFiles(rootDir string) (xmlFiles, pcapFiles []string, err error) {
 	return xmlFiles, pcapFiles, nil
 }
 
-func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *model.NetworkMap, summary *model.PcapSummary, packetSources map[gopacket.Packet]string) {
-	for sessionKey, packets := range eapolTracker {
+// ProcessHandshakes refactored to take the summary object directly.
+func ProcessHandshakes(networkMap *model.NetworkMap, summary *model.PcapSummary) {
+	for sessionKey, packets := range summary.EapolTracker {
 		macs := strings.Split(sessionKey, "-")
 		if len(macs) != 2 {
 			continue
@@ -593,16 +661,8 @@ func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *mo
 			}
 			host, found := networkMap.Hosts[addr]
 			if !found {
-				host = &model.Host{
-					MACAddress:     addr,
-					DiscoveredBy:   "Pcap (Handshake)",
-					IPv4Addresses:  make(map[string]bool),
-					Ports:          make(map[int]model.Port),
-					Communications: make(map[string]*model.Communication),
-					Findings:       make(map[model.FindingCategory][]model.Vulnerability),
-					DNSLookups:     make(map[string]bool),
-					Fingerprint:    &model.Fingerprint{BehavioralClues: make(map[string]bool)},
-				}
+				host = model.NewHost(addr)
+				host.DiscoveredBy = "Pcap (Handshake)"
 				networkMap.Hosts[addr] = host
 			}
 			if host.Wifi == nil {
@@ -630,7 +690,7 @@ func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *mo
 			}
 
 			lastPacket := packets[len(packets)-1]
-			pcapFile := packetSources[lastPacket]
+			pcapFile := summary.PacketSources[lastPacket]
 
 			summary.CapturedHandshakes = append(summary.CapturedHandshakes, model.Handshake{
 				ClientMAC:      strings.ToUpper(clientMAC),
