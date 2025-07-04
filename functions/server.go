@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"gonetmap/storage"
 	"html/template"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -135,8 +137,25 @@ func StartServer(embeddedTemplates embed.FS) {
 			})
 		})
 
-		// FIX: This route is no longer needed as the graph is embedded in the host detail page.
-		// campaignRoutes.GET("/hosts/:id/communications_graph", ...)
+		// Route for report download
+		campaignRoutes.GET("/report/zip", func(c *gin.Context) {
+			campaignID, _ := strconv.ParseInt(c.Param("campaignID"), 10, 64)
+			campaign, err := storage.GetCampaignByID(campaignID)
+			if err != nil {
+				c.String(http.StatusNotFound, "Campaign not found")
+				return
+			}
+
+			zipData, err := GenerateReportZip(campaignID)
+			if err != nil {
+				c.String(http.StatusInternalServerError, "Could not generate ZIP report.")
+				return
+			}
+
+			filename := fmt.Sprintf("gonetmap_report_%s_%s.zip", strings.ReplaceAll(campaign.Name, " ", "_"), time.Now().Format("2006-01-02"))
+			c.Header("Content-Disposition", "attachment; filename="+filename)
+			c.Data(http.StatusOK, "application/zip", zipData)
+		})
 	}
 
 	// --- Group all campaign-specific API endpoints ---
@@ -243,5 +262,7 @@ func StartServer(embeddedTemplates embed.FS) {
 
 	port := "8080"
 	fmt.Printf("✅ Starting web server. View your campaigns at: http://localhost:%s\n", port)
-	router.Run(":" + port)
+	if err := router.Run(":" + port); err != nil {
+		log.Fatalf("FATAL: Could not start web server: %v", err)
+	}
 }

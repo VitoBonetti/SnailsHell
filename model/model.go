@@ -40,10 +40,11 @@ func NewHost(mac string) *Host {
 		IPv4Addresses:  make(map[string]bool),
 		Ports:          make(map[int]Port),
 		Communications: make(map[string]*Communication),
-		Findings:       make(map[FindingCategory][]Vulnerability),
-		DNSLookups:     make(map[string]bool),
-		Fingerprint:    &Fingerprint{BehavioralClues: make(map[string]bool)},
-		Wifi:           &WifiInfo{ProbeRequests: make(map[string]bool)},
+		// FIX: Remove the unnecessary 'model.' prefix.
+		Findings:    make(map[FindingCategory][]Vulnerability),
+		DNSLookups:  make(map[string]bool),
+		Fingerprint: &Fingerprint{BehavioralClues: make(map[string]bool)},
+		Wifi:        &WifiInfo{ProbeRequests: make(map[string]bool)},
 	}
 }
 
@@ -113,9 +114,8 @@ type PcapSummary struct {
 	AllProbeRequests   map[string]map[string]bool
 	UnidentifiedMACs   map[string]string
 	CapturedHandshakes []Handshake
-	// FIX: Add missing fields for internal processing.
-	EapolTracker  map[string][]gopacket.Packet `json:"-"`
-	PacketSources map[gopacket.Packet]string   `json:"-"`
+	EapolTracker       map[string][]gopacket.Packet `json:"-"`
+	PacketSources      map[gopacket.Packet]string   `json:"-"`
 }
 
 // NewPcapSummary creates an initialized PcapSummary.
@@ -126,9 +126,8 @@ func NewPcapSummary() *PcapSummary {
 		AllProbeRequests:   make(map[string]map[string]bool),
 		UnidentifiedMACs:   make(map[string]string),
 		CapturedHandshakes: []Handshake{},
-		// FIX: Initialize the new maps.
-		EapolTracker:  make(map[string][]gopacket.Packet),
-		PacketSources: make(map[gopacket.Packet]string),
+		EapolTracker:       make(map[string][]gopacket.Packet),
+		PacketSources:      make(map[gopacket.Packet]string),
 	}
 }
 
@@ -145,4 +144,14 @@ type Handshake struct {
 // ToHCCAPXString converts the handshake data to a hex string for display.
 func (h *Handshake) ToHCCAPXString() string {
 	return hex.EncodeToString(h.HCCAPX)
+}
+
+// ReportHandshakeInfo is a struct for displaying handshakes in the UI and reports.
+type ReportHandshakeInfo struct {
+	ID        int64
+	APMAC     string
+	ClientMAC string
+	SSID      string
+	PcapFile  string
+	HCCAPX    string // The hex-encoded data for display
 }

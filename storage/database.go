@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"gonetmap/model"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,6 @@ func InitDB(filepath string) error {
 	var err error
 	DB, err = sql.Open("sqlite", filepath)
 	if err != nil {
-		// Wrap the original error with more context.
 		return fmt.Errorf("could not open database file %s: %w", filepath, err)
 	}
 	if err = DB.Ping(); err != nil {
@@ -117,7 +117,7 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 	if err != nil {
 		return fmt.Errorf("could not begin database transaction: %w", err)
 	}
-	defer tx.Rollback() // Rollback on error, Commit will override this if successful
+	defer tx.Rollback()
 
 	hostStmt, err := tx.Prepare(`
 		INSERT INTO hosts(campaign_id, mac_address, ip_address, os_guess, vendor, status, discovered_by, device_type, behavioral_clues) 
@@ -187,7 +187,6 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 
 		hostID, err := res.LastInsertId()
 		if err != nil {
-			// This branch is taken when the host already exists and we need to get its ID for foreign keys.
 			err = tx.QueryRow("SELECT id FROM hosts WHERE campaign_id = ? AND mac_address = ?", campaignID, host.MACAddress).Scan(&hostID)
 			if err != nil {
 				return fmt.Errorf("could not get existing host ID for %s: %w", host.MACAddress, err)
@@ -272,26 +271,19 @@ type HostInfo struct {
 	Status       string `json:"status"`
 	DiscoveredBy string `json:"discovered_by"`
 	DeviceType   string `json:"device_type"`
-	HasVulns     bool   `json:"has_vulns"` // New field
+	HasVulns     bool   `json:"has_vulns"`
 }
 
-// GetHostsByCampaign retrieves a list of all hosts for a given campaign.
-func GetHostsByCampaign(campaignID int64) ([]HostInfo, error) {
-	rows, err := DB.Query("SELECT id, mac_address, ip_address, vendor, status FROM hosts WHERE campaign_id = ?", campaignID)
-	if err != nil {
-		return nil, fmt.Errorf("could not query hosts for campaign %d: %w", campaignID, err)
-	}
-	defer rows.Close()
-
-	var hosts []HostInfo
-	for rows.Next() {
-		var h HostInfo
-		if err := rows.Scan(&h.ID, &h.MACAddress, &h.IPAddress, &h.Vendor, &h.Status); err != nil {
-			return nil, fmt.Errorf("could not scan host row: %w", err)
-		}
-		hosts = append(hosts, h)
-	}
-	return hosts, nil
+// ReportHostInfo is a more detailed struct for report generation.
+type ReportHostInfo struct {
+	ID         int64
+	MACAddress string
+	IPAddress  string
+	Vendor     string
+	OSGuess    string
+	DeviceType string
+	Status     string
+	HasVulns   bool
 }
 
 // CampaignInfo is a simple struct for listing campaigns.
@@ -334,7 +326,6 @@ func GetHostByID(hostID int64, campaignID int64) (*model.Host, error) {
 	host.ID = hostID
 	var ipAddress, vendor, osGuess, deviceType, clues string
 
-	// FIX: Add campaign_id to the query to ensure the host belongs to the correct campaign.
 	err := DB.QueryRow(`
 		SELECT mac_address, ip_address, vendor, os_guess, status, device_type, behavioral_clues
 		FROM hosts WHERE id = ? AND campaign_id = ?`, hostID, campaignID).Scan(
@@ -443,12 +434,10 @@ func GetCampaignByID(id int64) (*CampaignInfo, error) {
 	return &c, nil
 }
 
-// GetHostsByCampaignPaginated retrieves a specific "page" of hosts with search and filtering.
 func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, filter string) ([]HostInfo, int, error) {
 	var hosts []HostInfo
 	var totalHosts int
 
-	// Base query
 	baseQuery := `
         FROM hosts h
         LEFT JOIN vulnerabilities v ON h.id = v.host_id
@@ -456,18 +445,15 @@ func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, fi
     `
 	args := []interface{}{campaignID}
 
-	// Apply filters
 	var conditions []string
 	if filter == "up" {
 		conditions = append(conditions, "h.status = 'up'")
 	} else if filter == "down" {
-		// A host is "down" if its status is explicitly 'down' OR if it has no status (e.g., from pcap only)
 		conditions = append(conditions, "(h.status = 'down' OR h.status = '')")
 	} else if filter == "vulns" {
 		conditions = append(conditions, "v.id IS NOT NULL")
 	}
 
-	// Apply search term
 	if search != "" {
 		searchCondition := "(h.ip_address LIKE ? OR h.mac_address LIKE ? OR h.vendor LIKE ?)"
 		conditions = append(conditions, searchCondition)
@@ -479,14 +465,12 @@ func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, fi
 		baseQuery += " AND " + strings.Join(conditions, " AND ")
 	}
 
-	// Count total matching hosts
 	countQuery := "SELECT COUNT(DISTINCT h.id) " + baseQuery
 	err := DB.QueryRow(countQuery, args...).Scan(&totalHosts)
 	if err != nil {
 		return nil, 0, fmt.Errorf("could not count filtered hosts: %w", err)
 	}
 
-	// Get paginated hosts
 	selectQuery := `
         SELECT DISTINCT h.id, h.mac_address, h.ip_address, h.vendor, h.status,
         (CASE WHEN EXISTS (SELECT 1 FROM vulnerabilities WHERE host_id = h.id) THEN 1 ELSE 0 END) as has_vulns
@@ -511,12 +495,156 @@ func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, fi
 	return hosts, totalHosts, nil
 }
 
-// CountHostsByCampaign returns the total number of hosts for a campaign.
-func CountHostsByCampaign(campaignID int64) (int, error) {
-	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ?", campaignID).Scan(&count)
+func GetAllHostsForReport(campaignID int64) ([]ReportHostInfo, error) {
+	query := `
+        SELECT
+            h.id, h.mac_address, h.ip_address, h.vendor, h.os_guess, h.device_type, h.status,
+            (CASE WHEN EXISTS (SELECT 1 FROM vulnerabilities WHERE host_id = h.id) THEN 1 ELSE 0 END) as has_vulns
+        FROM hosts h
+        WHERE h.campaign_id = ? ORDER BY h.ip_address`
+	rows, err := DB.Query(query, campaignID)
 	if err != nil {
-		return 0, fmt.Errorf("could not count hosts for campaign %d: %w", campaignID, err)
+		return nil, fmt.Errorf("could not query all hosts for report: %w", err)
+	}
+	defer rows.Close()
+
+	var hosts []ReportHostInfo
+	for rows.Next() {
+		var h ReportHostInfo
+		if err := rows.Scan(&h.ID, &h.MACAddress, &h.IPAddress, &h.Vendor, &h.OSGuess, &h.DeviceType, &h.Status, &h.HasVulns); err != nil {
+			return nil, fmt.Errorf("could not scan host row for report: %w", err)
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, nil
+}
+
+func GetAllPortsForReport(campaignID int64) ([][]string, error) {
+	query := `
+        SELECT h.mac_address, p.port_number, p.protocol, p.state, p.service, p.version
+        FROM ports p JOIN hosts h ON p.host_id = h.id
+        WHERE h.campaign_id = ? ORDER BY h.mac_address, p.port_number`
+	rows, err := DB.Query(query, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query ports for report: %w", err)
+	}
+	defer rows.Close()
+
+	var results [][]string
+	for rows.Next() {
+		var mac, service, version string
+		var port int
+		var protocol, state string
+		if err := rows.Scan(&mac, &port, &protocol, &state, &service, &version); err != nil {
+			return nil, err
+		}
+		results = append(results, []string{mac, strconv.Itoa(port), protocol, state, service, version})
+	}
+	return results, nil
+}
+
+func GetAllVulnsForReport(campaignID int64) ([][]string, error) {
+	query := `
+        SELECT h.mac_address, v.cve, v.category, v.state, v.description
+        FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id
+        WHERE h.campaign_id = ? ORDER BY h.mac_address, v.category`
+	rows, err := DB.Query(query, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query vulnerabilities for report: %w", err)
+	}
+	defer rows.Close()
+
+	var results [][]string
+	for rows.Next() {
+		var mac, cve, category, state, description string
+		if err := rows.Scan(&mac, &cve, &category, &state, &description); err != nil {
+			return nil, err
+		}
+		results = append(results, []string{mac, cve, category, state, description})
+	}
+	return results, nil
+}
+
+func GetAllCommsForReport(campaignID int64) ([][]string, error) {
+	query := `
+        SELECT h.mac_address, c.counterpart_ip, c.packet_count, c.geo_city, c.geo_country, c.geo_isp
+        FROM communications c JOIN hosts h ON c.host_id = h.id
+        WHERE h.campaign_id = ? ORDER BY h.mac_address, c.counterpart_ip`
+	rows, err := DB.Query(query, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query communications for report: %w", err)
+	}
+	defer rows.Close()
+
+	var results [][]string
+	for rows.Next() {
+		var mac, counterpart, city, country, isp string
+		var packetCount int
+		if err := rows.Scan(&mac, &counterpart, &packetCount, &city, &country, &isp); err != nil {
+			return nil, err
+		}
+		results = append(results, []string{mac, counterpart, strconv.Itoa(packetCount), city, country, isp})
+	}
+	return results, nil
+}
+
+func GetAllDNSForReport(campaignID int64) ([][]string, error) {
+	query := `
+        SELECT h.mac_address, d.domain
+        FROM dns_lookups d JOIN hosts h ON d.host_id = h.id
+        WHERE h.campaign_id = ? ORDER BY h.mac_address, d.domain`
+	rows, err := DB.Query(query, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query dns lookups for report: %w", err)
+	}
+	defer rows.Close()
+
+	var results [][]string
+	for rows.Next() {
+		var mac, domain string
+		if err := rows.Scan(&mac, &domain); err != nil {
+			return nil, err
+		}
+		results = append(results, []string{mac, domain})
+	}
+	return results, nil
+}
+
+// FIX: This function now returns the correct type from the model package.
+func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]model.ReportHandshakeInfo, error) {
+	rows, err := DB.Query(`
+		SELECT id, ap_mac, client_mac, ssid, pcap_file, hccapx_data
+		FROM handshakes
+		WHERE campaign_id = ?
+		ORDER BY id DESC
+		LIMIT ? OFFSET ?`, campaignID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("could not query paginated handshakes for campaign %d: %w", campaignID, err)
+	}
+	defer rows.Close()
+
+	var handshakes []model.ReportHandshakeInfo
+	for rows.Next() {
+		var h model.ReportHandshakeInfo
+		var hccapxData []byte
+		if err := rows.Scan(&h.ID, &h.APMAC, &h.ClientMAC, &h.SSID, &h.PcapFile, &hccapxData); err != nil {
+			return nil, fmt.Errorf("could not scan paginated handshake row: %w", err)
+		}
+		h.HCCAPX = hex.EncodeToString(hccapxData)
+		handshakes = append(handshakes, h)
+	}
+	return handshakes, nil
+}
+
+func GetAllHandshakesForReport(campaignID int64) ([]model.ReportHandshakeInfo, error) {
+	return GetHandshakesByCampaignPaginated(campaignID, 10000, 0)
+}
+
+func CountHandshakesByCampaign(campaignID int64) (int, error) {
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM handshakes WHERE campaign_id = ?", campaignID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("could not count handshakes for campaign %d: %w", campaignID, err)
 	}
 	return count, err
 }
@@ -589,47 +717,4 @@ func GetDashboardSummary(campaignID int64) (*DashboardSummary, error) {
 	}
 
 	return summary, nil
-}
-
-type HandshakeInfo struct {
-	ID        int64
-	APMAC     string
-	ClientMAC string
-	SSID      string
-	PcapFile  string
-	HCCAPX    string
-}
-
-func CountHandshakesByCampaign(campaignID int64) (int, error) {
-	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM handshakes WHERE campaign_id = ?", campaignID).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("could not count handshakes for campaign %d: %w", campaignID, err)
-	}
-	return count, err
-}
-
-func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]HandshakeInfo, error) {
-	rows, err := DB.Query(`
-		SELECT id, ap_mac, client_mac, ssid, pcap_file, hccapx_data
-		FROM handshakes
-		WHERE campaign_id = ?
-		ORDER BY id DESC
-		LIMIT ? OFFSET ?`, campaignID, limit, offset)
-	if err != nil {
-		return nil, fmt.Errorf("could not query paginated handshakes for campaign %d: %w", campaignID, err)
-	}
-	defer rows.Close()
-
-	var handshakes []HandshakeInfo
-	for rows.Next() {
-		var h HandshakeInfo
-		var hccapxData []byte
-		if err := rows.Scan(&h.ID, &h.APMAC, &h.ClientMAC, &h.SSID, &h.PcapFile, &hccapxData); err != nil {
-			return nil, fmt.Errorf("could not scan paginated handshake row: %w", err)
-		}
-		h.HCCAPX = hex.EncodeToString(hccapxData)
-		handshakes = append(handshakes, h)
-	}
-	return handshakes, nil
 }

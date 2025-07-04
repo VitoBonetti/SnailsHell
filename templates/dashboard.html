@@ -33,7 +33,6 @@
             </div>
             <div class="mt-4 sm:mt-0 flex items-center gap-4">
                 <a href="/" class="text-blue-400 hover:text-blue-300">&larr; All Campaigns</a>
-                <!-- NEW: Campaign Switcher -->
                 <select id="campaign-switcher" class="bg-gray-700 border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500">
                     <option>Switch Campaign...</option>
                     {{range .AllCampaigns}}
@@ -42,6 +41,8 @@
                         {{end}}
                     {{end}}
                 </select>
+                <!-- FIX: Update button text and link -->
+                <a href="/campaign/{{.Campaign.ID}}/report/zip" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-500">Export as ZIP</a>
             </div>
         </div>
 
@@ -105,11 +106,10 @@
     </div>
 
     <script>
-        // Safely get campaign ID
         const campaignID = "{{.Campaign.ID}}";
         let currentPage = 1;
         let currentSearch = '';
-        let currentFilter = 'all'; // Default filter
+        let currentFilter = 'all'; 
 
         const hostsGrid = document.getElementById('hosts-grid');
         const paginationControls = document.getElementById('pagination-controls');
@@ -119,7 +119,6 @@
 
         async function fetchHosts(page = 1, search = '', filter = 'all') {
             try {
-                // Show a loading state
                 hostsGrid.innerHTML = '<p class="text-center col-span-full">Loading hosts...</p>';
                 
                 const response = await fetch(`/api/campaign/${campaignID}/hosts?page=${page}&search=${search}&filter=${filter}`);
@@ -136,7 +135,7 @@
         }
 
         function renderHosts(hosts) {
-            hostsGrid.innerHTML = ''; // Clear previous hosts
+            hostsGrid.innerHTML = ''; 
             if (!hosts || hosts.length === 0) {
                 hostsGrid.innerHTML = '<p class="text-center col-span-full">No hosts found for the current filter.</p>';
                 return;
@@ -168,7 +167,6 @@
             paginationControls.innerHTML = '';
             if (totalPages <= 1) return;
 
-            // Previous Button
             const prevButton = document.createElement('button');
             prevButton.innerText = 'Previous';
             prevButton.disabled = page === 1;
@@ -179,13 +177,11 @@
             };
             paginationControls.appendChild(prevButton);
 
-            // Page Info
             const pageInfo = document.createElement('span');
             pageInfo.innerText = `Page ${page} of ${totalPages}`;
             pageInfo.className = 'text-gray-300';
             paginationControls.appendChild(pageInfo);
 
-            // Next Button
             const nextButton = document.createElement('button');
             nextButton.innerText = 'Next';
             nextButton.disabled = page === totalPages;
@@ -197,12 +193,10 @@
             paginationControls.appendChild(nextButton);
         }
 
-        // Event Listeners
         searchInput.addEventListener('input', (e) => {
-            // Basic debouncing
             setTimeout(() => {
                 if (currentSearch === e.target.value) {
-                    currentPage = 1; // Reset to first page on new search
+                    currentPage = 1; 
                     fetchHosts(currentPage, currentSearch, currentFilter);
                 }
             }, 300);
@@ -211,12 +205,11 @@
 
         filterButtons.forEach(button => {
             button.addEventListener('click', () => {
-                // Update active state
                 filterButtons.forEach(btn => btn.classList.remove('active'));
                 button.classList.add('active');
                 
                 currentFilter = button.dataset.filter;
-                currentPage = 1; // Reset to first page
+                currentPage = 1; 
                 fetchHosts(currentPage, currentSearch, currentFilter);
             });
         });
@@ -228,7 +221,6 @@
             }
         });
 
-        // Initial fetch
         document.addEventListener('DOMContentLoaded', () => {
             document.querySelector('.btn-filter[data-filter="all"]').classList.add('active');
             fetchHosts(currentPage, currentSearch, currentFilter);
