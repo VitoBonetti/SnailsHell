@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 	"unicode"
 
 	"github.com/google/gopacket"
@@ -31,6 +34,7 @@ func main() {
 	campaignName := flag.String("campaign", "", "Name of the campaign to scan and add data to.")
 	openCampaignName := flag.String("open", "", "Name of the campaign to open in the web UI without running a new scan.")
 	listCampaigns := flag.Bool("list", false, "List all existing campaigns.")
+	dataDir := flag.String("dir", "./data", "Directory containing Nmap XML and Pcap files.")
 
 	flag.Parse()
 
@@ -40,56 +44,126 @@ func main() {
 		return
 	}
 
-	// --campaign: Run a scan, then start the server and open the browser.
 	if *campaignName != "" {
-		handleScanCampaign(*campaignName) // This function now handles everything and blocks.
+		handleScanCampaign(*campaignName, *dataDir)
 		return
 	}
 
-	// --open: Just start the server and open the browser to a specific campaign.
 	if *openCampaignName != "" {
 		campaignID, err := storage.GetOrCreateCampaign(*openCampaignName)
 		if err != nil {
-			log.Fatalf("Error finding campaign: %v", err)
+			log.Fatalf("Error finding campaign '%s': %v", *openCampaignName, err)
 		}
 		fmt.Printf("✅ Opening Campaign: '%s' (ID: %d)\n", *openCampaignName, campaignID)
 		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID))
 		return
 	}
 
-	// Default (no flags): Just launch the server and the main campaign list page.
 	fmt.Println("✅ No specific campaign requested. Starting server...")
 	launchServerAndBrowser("http://localhost:8080/")
 }
 
-// processFiles handles the core logic of parsing and enrichment.
+// processFiles handles the core logic of parsing and enrichment concurrently.
 func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapSummary) {
 	masterMap := model.NewNetworkMap()
-	fmt.Println("\n--- Parsing Nmap files ---")
-	for _, file := range xmlFiles {
-		if err := functions.MergeFromFile(file, masterMap); err != nil {
-			log.Printf("Warning: could not parse Nmap file %s: %v", file, err)
-		}
-	}
-	fmt.Printf("\n✅ Nmap parsing complete. Found %d unique hosts.\n\n", len(masterMap.Hosts))
+	var mapMutex sync.Mutex
 
+	var wg sync.WaitGroup
+	// A buffered channel to collect errors from goroutines without blocking them.
+	errChan := make(chan error, len(xmlFiles)+len(pcapFiles))
+
+	var processedCount int32
+	totalFiles := int32(len(xmlFiles) + len(pcapFiles))
+	done := make(chan bool)
+
+	// Goroutine for showing progress
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				// \r moves the cursor to the beginning of the line so we can overwrite it.
+				fmt.Printf("\rProcessing files: %d/%d", atomic.LoadInt32(&processedCount), totalFiles)
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+
+	// --- 1. Nmap Parsing (Concurrent) ---
+	if len(xmlFiles) > 0 {
+		fmt.Println("\n--- Parsing Nmap files ---")
+		for _, file := range xmlFiles {
+			wg.Add(1)
+			go func(filePath string) {
+				defer wg.Done()
+				defer atomic.AddInt32(&processedCount, 1) // Increment counter when done
+
+				tempMap := model.NewNetworkMap()
+				if err := functions.MergeFromFile(filePath, tempMap); err != nil {
+					errChan <- fmt.Errorf("could not parse Nmap file %s: %w", filePath, err)
+					return
+				}
+
+				mapMutex.Lock()
+				for k, v := range tempMap.Hosts {
+					masterMap.Hosts[k] = v
+				}
+				mapMutex.Unlock()
+			}(file)
+		}
+		wg.Wait()
+	}
+
+	// --- 2. Pcap Enrichment (Concurrent) ---
 	globalSummary := model.NewPcapSummary()
 	eapolTracker := make(map[string][]gopacket.Packet)
 	packetSources := make(map[gopacket.Packet]string)
+	var pcapMutex sync.Mutex // Mutex for all pcap-related shared data structures.
 
 	if len(pcapFiles) > 0 {
-		fmt.Println("--- Enriching with Pcap files ---")
+		fmt.Println("\n--- Enriching with Pcap files ---")
 		for _, file := range pcapFiles {
-			if err := functions.EnrichData(file, masterMap, globalSummary, eapolTracker, packetSources); err != nil {
-				log.Printf("Warning: could not process pcap file %s: %v", file, err)
-			}
+			wg.Add(1)
+			go func(filePath string) {
+				defer wg.Done()
+				defer atomic.AddInt32(&processedCount, 1) // Increment counter when done
+
+				pcapMutex.Lock()
+				defer pcapMutex.Unlock()
+
+				if err := functions.EnrichData(filePath, masterMap, globalSummary, eapolTracker, packetSources); err != nil {
+					errChan <- fmt.Errorf("could not process pcap file %s: %w", filePath, err)
+					return
+				}
+			}(file)
 		}
-		fmt.Println("\n✅ Pcap enrichment complete.")
+		wg.Wait()
 	}
 
+	// --- 3. Cleanup and Error Reporting ---
+	done <- true // Stop the progress bar goroutine
+	fmt.Printf("\rProcessing files: %d/%d... Done.\n", atomic.LoadInt32(&processedCount), totalFiles)
+
+	close(errChan)
+	hasErrors := false
+	for err := range errChan {
+		if !hasErrors {
+			fmt.Println("\n--- Warnings ---")
+			hasErrors = true
+		}
+		log.Printf("  - %v", err)
+	}
+	if hasErrors {
+		fmt.Println("NOTE: Some files could not be processed completely. See warnings above.")
+	}
+
+	fmt.Printf("\n✅ File processing complete. Found %d unique hosts.\n\n", len(masterMap.Hosts))
+
+	// --- 4. Post-processing (Sequential) ---
 	ProcessHandshakes(eapolTracker, masterMap, globalSummary, packetSources)
 
-	fmt.Println("\n--- Performing Geolocation Lookups ---")
+	fmt.Println("--- Performing Geolocation Lookups ---")
 	geoCache := make(map[string]*model.GeoInfo)
 	for _, host := range masterMap.Hosts {
 		for _, comm := range host.Communications {
@@ -108,7 +182,7 @@ func processFiles(xmlFiles, pcapFiles []string) (*model.NetworkMap, *model.PcapS
 			}
 		}
 	}
-	fmt.Println("\n✅ Geolocation enrichment complete.")
+	fmt.Println("✅ Geolocation enrichment complete.")
 
 	fmt.Println("\n--- Performing Local MAC Vendor Lookups ---")
 	allMacsToLookup := make(map[string]string)
@@ -391,21 +465,27 @@ func handleListCampaigns() {
 }
 
 // handleScanCampaign performs the full scan and then calls the blocking server/browser launcher.
-func handleScanCampaign(name string) {
+func handleScanCampaign(name, dataDir string) {
+	// Trim quotes from the path which can be added by shells on Windows.
+	dataDir = strings.Trim(dataDir, "\"")
+	// Clean the directory path to handle issues like trailing slashes.
+	cleanDataDir := filepath.Clean(dataDir)
+
 	campaignID, err := storage.GetOrCreateCampaign(name)
 	if err != nil {
-		log.Fatalf("Error handling campaign: %v", err)
+		log.Fatalf("Error handling campaign '%s': %v", name, err)
 	}
 	fmt.Printf("✅ Operating on Campaign: '%s' (ID: %d)\n", name, campaignID)
 
-	xmlFiles, pcapFiles, err := findDataFiles("./data")
+	xmlFiles, pcapFiles, err := findDataFiles(cleanDataDir)
 	if err != nil {
-		log.Fatalf("Error finding data files: %v", err)
+		// This is a fatal error because the core input is invalid.
+		log.Fatalf("FATAL: Could not find data files: %v", err)
 	}
 	if len(xmlFiles) == 0 && len(pcapFiles) == 0 {
-		fmt.Println("No new data files found in ./data directory. Launching UI with existing data.")
+		fmt.Printf("No new data files found in '%s' directory. Launching UI with existing data.\n", cleanDataDir)
 	} else {
-		fmt.Printf("🔎 Found %d Nmap files and %d Pcap files.\n", len(xmlFiles), len(pcapFiles))
+		fmt.Printf("🔎 Found %d Nmap files and %d Pcap files in '%s'.\n", len(xmlFiles), len(pcapFiles), cleanDataDir)
 		masterMap, globalSummary := processFiles(xmlFiles, pcapFiles)
 		fmt.Println("\n--- Saving results to database ---")
 		if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
@@ -433,9 +513,23 @@ func launchServerAndBrowser(url string) {
 
 // findDataFiles scans a directory for relevant data files.
 func findDataFiles(rootDir string) (xmlFiles, pcapFiles []string, err error) {
-	err = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+	// First, check if the provided directory exists and is a directory.
+	info, err := os.Stat(rootDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("directory does not exist: %s", rootDir)
+		}
+		// Handle other potential errors from os.Stat, like permission errors
+		return nil, nil, fmt.Errorf("could not access directory %s: %w", rootDir, err)
+	}
+	if !info.IsDir() {
+		return nil, nil, fmt.Errorf("path is not a directory: %s", rootDir)
+	}
+
+	// If the directory is valid, walk through it.
+	walkErr := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			return err // An error from filepath.Walk itself.
 		}
 		if !info.IsDir() {
 			ext := strings.ToLower(filepath.Ext(path))
@@ -447,7 +541,12 @@ func findDataFiles(rootDir string) (xmlFiles, pcapFiles []string, err error) {
 		}
 		return nil
 	})
-	return
+
+	if walkErr != nil {
+		return nil, nil, fmt.Errorf("error walking directory %s: %w", rootDir, walkErr)
+	}
+
+	return xmlFiles, pcapFiles, nil
 }
 
 func ProcessHandshakes(eapolTracker map[string][]gopacket.Packet, networkMap *model.NetworkMap, summary *model.PcapSummary, packetSources map[gopacket.Packet]string) {

@@ -17,7 +17,8 @@ func InitDB(filepath string) error {
 	var err error
 	DB, err = sql.Open("sqlite", filepath)
 	if err != nil {
-		return fmt.Errorf("could not open database: %w", err)
+		// Wrap the original error with more context.
+		return fmt.Errorf("could not open database file %s: %w", filepath, err)
 	}
 	if err = DB.Ping(); err != nil {
 		return fmt.Errorf("could not connect to database: %w", err)
@@ -114,28 +115,49 @@ func createTables() error {
 func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *model.PcapSummary) error {
 	tx, err := DB.Begin()
 	if err != nil {
-		return err
+		return fmt.Errorf("could not begin database transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() // Rollback on error, Commit will override this if successful
 
-	hostStmt, _ := tx.Prepare(`
+	hostStmt, err := tx.Prepare(`
 		INSERT INTO hosts(campaign_id, mac_address, ip_address, os_guess, vendor, status, discovered_by, device_type, behavioral_clues) 
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) 
 		ON CONFLICT(campaign_id, mac_address) DO UPDATE SET 
 		ip_address=excluded.ip_address, os_guess=excluded.os_guess, vendor=excluded.vendor, status=excluded.status, device_type=excluded.device_type, behavioral_clues=excluded.behavioral_clues;
 	`)
-	// (other prepared statements are unchanged)
-	portStmt, _ := tx.Prepare(`INSERT INTO ports(host_id, port_number, protocol, state, service, version) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(host_id, port_number, protocol) DO UPDATE SET state=excluded.state, service=excluded.service, version=excluded.version;`)
-	vulnStmt, _ := tx.Prepare(`INSERT INTO vulnerabilities(host_id, port_id, cve, description, state, category) VALUES(?, ?, ?, ?, ?, ?);`)
-	commStmt, _ := tx.Prepare(`INSERT INTO communications(host_id, counterpart_ip, packet_count, geo_country, geo_city, geo_isp) VALUES(?, ?, ?, ?, ?, ?);`)
-	dnsStmt, _ := tx.Prepare(`INSERT OR IGNORE INTO dns_lookups(host_id, domain) VALUES(?, ?);`)
-	handshakeStmt, _ := tx.Prepare(`INSERT INTO handshakes(campaign_id, ap_mac, client_mac, ssid, state, pcap_file, hccapx_data) VALUES (?, ?, ?, ?, ?, ?, ?);`)
-
+	if err != nil {
+		return fmt.Errorf("could not prepare host statement: %w", err)
+	}
 	defer hostStmt.Close()
+
+	portStmt, err := tx.Prepare(`INSERT INTO ports(host_id, port_number, protocol, state, service, version) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(host_id, port_number, protocol) DO UPDATE SET state=excluded.state, service=excluded.service, version=excluded.version;`)
+	if err != nil {
+		return fmt.Errorf("could not prepare port statement: %w", err)
+	}
 	defer portStmt.Close()
+
+	vulnStmt, err := tx.Prepare(`INSERT INTO vulnerabilities(host_id, port_id, cve, description, state, category) VALUES(?, ?, ?, ?, ?, ?);`)
+	if err != nil {
+		return fmt.Errorf("could not prepare vulnerability statement: %w", err)
+	}
 	defer vulnStmt.Close()
+
+	commStmt, err := tx.Prepare(`INSERT INTO communications(host_id, counterpart_ip, packet_count, geo_country, geo_city, geo_isp) VALUES(?, ?, ?, ?, ?, ?);`)
+	if err != nil {
+		return fmt.Errorf("could not prepare communication statement: %w", err)
+	}
 	defer commStmt.Close()
+
+	dnsStmt, err := tx.Prepare(`INSERT OR IGNORE INTO dns_lookups(host_id, domain) VALUES(?, ?);`)
+	if err != nil {
+		return fmt.Errorf("could not prepare dns lookup statement: %w", err)
+	}
 	defer dnsStmt.Close()
+
+	handshakeStmt, err := tx.Prepare(`INSERT INTO handshakes(campaign_id, ap_mac, client_mac, ssid, state, pcap_file, hccapx_data) VALUES (?, ?, ?, ?, ?, ?, ?);`)
+	if err != nil {
+		return fmt.Errorf("could not prepare handshake statement: %w", err)
+	}
 	defer handshakeStmt.Close()
 
 	for _, host := range networkMap.Hosts {
@@ -151,7 +173,6 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 			osGuess = host.Fingerprint.OperatingSystem
 			deviceType = host.Fingerprint.DeviceType
 
-			// Convert the clues map to a single string
 			var clueList []string
 			for clue := range host.Fingerprint.BehavioralClues {
 				clueList = append(clueList, clue)
@@ -166,13 +187,13 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 
 		hostID, err := res.LastInsertId()
 		if err != nil {
+			// This branch is taken when the host already exists and we need to get its ID for foreign keys.
 			err = tx.QueryRow("SELECT id FROM hosts WHERE campaign_id = ? AND mac_address = ?", campaignID, host.MACAddress).Scan(&hostID)
 			if err != nil {
-				return fmt.Errorf("could not get host ID for %s: %w", host.MACAddress, err)
+				return fmt.Errorf("could not get existing host ID for %s: %w", host.MACAddress, err)
 			}
 		}
 
-		// (rest of the save logic is unchanged)
 		for _, port := range host.Ports {
 			_, err := portStmt.Exec(hostID, port.ID, port.Protocol, port.State, port.Service, port.Version)
 			if err != nil {
@@ -222,20 +243,20 @@ func GetOrCreateCampaign(name string) (int64, error) {
 			fmt.Printf("Campaign '%s' not found. Creating a new one.\n", name)
 			stmt, err := DB.Prepare("INSERT INTO campaigns(name, created_at) VALUES(?, ?)")
 			if err != nil {
-				return 0, err
+				return 0, fmt.Errorf("could not prepare campaign insert statement: %w", err)
 			}
 			defer stmt.Close()
 			res, err := stmt.Exec(name, time.Now())
 			if err != nil {
-				return 0, err
+				return 0, fmt.Errorf("could not create new campaign '%s': %w", name, err)
 			}
 			id, err := res.LastInsertId()
 			if err != nil {
-				return 0, err
+				return 0, fmt.Errorf("could not get ID of new campaign '%s': %w", name, err)
 			}
 			return id, nil
 		} else {
-			return 0, err
+			return 0, fmt.Errorf("could not query for campaign '%s': %w", name, err)
 		}
 	}
 	fmt.Printf("Found existing campaign '%s'. New data will be added to it.\n", name)
@@ -258,7 +279,7 @@ type HostInfo struct {
 func GetHostsByCampaign(campaignID int64) ([]HostInfo, error) {
 	rows, err := DB.Query("SELECT id, mac_address, ip_address, vendor, status FROM hosts WHERE campaign_id = ?", campaignID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not query hosts for campaign %d: %w", campaignID, err)
 	}
 	defer rows.Close()
 
@@ -266,7 +287,7 @@ func GetHostsByCampaign(campaignID int64) ([]HostInfo, error) {
 	for rows.Next() {
 		var h HostInfo
 		if err := rows.Scan(&h.ID, &h.MACAddress, &h.IPAddress, &h.Vendor, &h.Status); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan host row: %w", err)
 		}
 		hosts = append(hosts, h)
 	}
@@ -284,7 +305,7 @@ type CampaignInfo struct {
 func ListCampaigns() ([]CampaignInfo, error) {
 	rows, err := DB.Query("SELECT id, name, created_at FROM campaigns ORDER BY created_at DESC")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not query campaigns: %w", err)
 	}
 	defer rows.Close()
 
@@ -292,7 +313,7 @@ func ListCampaigns() ([]CampaignInfo, error) {
 	for rows.Next() {
 		var c CampaignInfo
 		if err := rows.Scan(&c.ID, &c.Name, &c.CreatedAt); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan campaign row: %w", err)
 		}
 		campaigns = append(campaigns, c)
 	}
@@ -301,22 +322,18 @@ func ListCampaigns() ([]CampaignInfo, error) {
 
 // GetHostByID retrieves all details for a single host, correctly handling nested data.
 func GetHostByID(hostID int64) (*model.Host, error) {
-	// Initialize the host with its nested maps and structs
 	host := &model.Host{
 		Ports:          make(map[int]model.Port),
 		IPv4Addresses:  make(map[string]bool),
 		Fingerprint:    &model.Fingerprint{},
-		Findings:       make(map[model.FindingCategory][]model.Vulnerability), // Initialize Findings
-		Communications: make(map[string]*model.Communication),                 // Initialize Communications
-		DNSLookups:     make(map[string]bool),                                 // Initialize DNSLookups
+		Findings:       make(map[model.FindingCategory][]model.Vulnerability),
+		Communications: make(map[string]*model.Communication),
+		DNSLookups:     make(map[string]bool),
 	}
 
 	host.ID = hostID
-
-	// Temporary variables to hold the data scanned from the database
 	var ipAddress, vendor, osGuess, deviceType, clues string
 
-	// Get main host details from the database
 	err := DB.QueryRow(`
 		SELECT mac_address, ip_address, vendor, os_guess, status, device_type, behavioral_clues
 		FROM hosts WHERE id = ?`, hostID).Scan(
@@ -327,10 +344,9 @@ func GetHostByID(hostID int64) (*model.Host, error) {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("host with ID %d not found", hostID)
 		}
-		return nil, fmt.Errorf("error querying host: %w", err)
+		return nil, fmt.Errorf("error querying host %d: %w", hostID, err)
 	}
 
-	// Correctly populate the nested structs
 	host.IPv4Addresses[ipAddress] = true
 	host.Fingerprint.Vendor = vendor
 	host.Fingerprint.OperatingSystem = osGuess
@@ -343,35 +359,33 @@ func GetHostByID(hostID int64) (*model.Host, error) {
 		}
 	}
 
-	// Get all ports for this host
 	portRows, err := DB.Query("SELECT id, port_number, protocol, state, service, version FROM ports WHERE host_id = ?", hostID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not query ports for host %d: %w", hostID, err)
 	}
 	defer portRows.Close()
 
-	portIDMap := make(map[int64]int) // Map DB port ID to port number for vulnerabilities
+	portIDMap := make(map[int64]int)
 	for portRows.Next() {
 		var p model.Port
 		var dbPortID int64
 		if err := portRows.Scan(&dbPortID, &p.ID, &p.Protocol, &p.State, &p.Service, &p.Version); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan port row for host %d: %w", hostID, err)
 		}
 		host.Ports[p.ID] = p
 		portIDMap[dbPortID] = p.ID
 	}
 
-	// NEW: Get vulnerabilities for this host
 	vulnRows, err := DB.Query("SELECT port_id, cve, description, state, category FROM vulnerabilities WHERE host_id = ?", hostID)
 	if err != nil {
-		return nil, fmt.Errorf("could not query vulnerabilities: %w", err)
+		return nil, fmt.Errorf("could not query vulnerabilities for host %d: %w", hostID, err)
 	}
 	defer vulnRows.Close()
 	for vulnRows.Next() {
 		var v model.Vulnerability
 		var portID sql.NullInt64
 		if err := vulnRows.Scan(&portID, &v.CVE, &v.Description, &v.State, &v.Category); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan vulnerability row for host %d: %w", hostID, err)
 		}
 		if portID.Valid {
 			v.PortID = portIDMap[portID.Int64]
@@ -379,17 +393,16 @@ func GetHostByID(hostID int64) (*model.Host, error) {
 		host.Findings[v.Category] = append(host.Findings[v.Category], v)
 	}
 
-	// NEW: Get communications for this host
 	commRows, err := DB.Query("SELECT counterpart_ip, packet_count, geo_country, geo_city, geo_isp FROM communications WHERE host_id = ?", hostID)
 	if err != nil {
-		return nil, fmt.Errorf("could not query communications: %w", err)
+		return nil, fmt.Errorf("could not query communications for host %d: %w", hostID, err)
 	}
 	defer commRows.Close()
 	for commRows.Next() {
 		var comm model.Communication
 		var country, city, isp sql.NullString
 		if err := commRows.Scan(&comm.CounterpartIP, &comm.PacketCount, &country, &city, &isp); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan communication row for host %d: %w", hostID, err)
 		}
 		if country.Valid || city.Valid || isp.Valid {
 			comm.Geo = &model.GeoInfo{
@@ -401,16 +414,15 @@ func GetHostByID(hostID int64) (*model.Host, error) {
 		host.Communications[comm.CounterpartIP] = &comm
 	}
 
-	// NEW: Get DNS lookups for this host
 	dnsRows, err := DB.Query("SELECT domain FROM dns_lookups WHERE host_id = ?", hostID)
 	if err != nil {
-		return nil, fmt.Errorf("could not query dns lookups: %w", err)
+		return nil, fmt.Errorf("could not query dns lookups for host %d: %w", hostID, err)
 	}
 	defer dnsRows.Close()
 	for dnsRows.Next() {
 		var domain string
 		if err := dnsRows.Scan(&domain); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan dns lookup row for host %d: %w", hostID, err)
 		}
 		host.DNSLookups[domain] = true
 	}
@@ -422,16 +434,18 @@ func GetCampaignByID(id int64) (*CampaignInfo, error) {
 	var c CampaignInfo
 	err := DB.QueryRow("SELECT id, name, created_at FROM campaigns WHERE id = ?", id).Scan(&c.ID, &c.Name, &c.CreatedAt)
 	if err != nil {
-		return nil, err
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("campaign with ID %d not found", id)
+		}
+		return nil, fmt.Errorf("could not query campaign %d: %w", id, err)
 	}
 	return &c, nil
 }
 
-// GetHostsByCampaignPaginated retrieves a specific "page" of hosts.
 func GetHostsByCampaignPaginated(campaignID int64, limit, offset int) ([]HostInfo, error) {
 	rows, err := DB.Query("SELECT id, mac_address, ip_address, vendor, status, discovered_by, device_type, behavioral_clues FROM hosts WHERE campaign_id = ? ORDER BY ip_address DESC LIMIT ? OFFSET ?", campaignID, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not query paginated hosts for campaign %d: %w", campaignID, err)
 	}
 	defer rows.Close()
 
@@ -439,21 +453,22 @@ func GetHostsByCampaignPaginated(campaignID int64, limit, offset int) ([]HostInf
 	for rows.Next() {
 		var h HostInfo
 		if err := rows.Scan(&h.ID, &h.MACAddress, &h.IPAddress, &h.Vendor, &h.Status, &h.DiscoveredBy, &h.DeviceType, &h.BehavioralClues); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan paginated host row: %w", err)
 		}
 		hosts = append(hosts, h)
 	}
 	return hosts, nil
 }
 
-// CountHostsByCampaign returns the total number of hosts for a campaign.
 func CountHostsByCampaign(campaignID int64) (int, error) {
 	var count int
 	err := DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ?", campaignID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("could not count hosts for campaign %d: %w", campaignID, err)
+	}
 	return count, err
 }
 
-// DashboardSummary holds summary data for the main dashboard.
 type DashboardSummary struct {
 	TotalHosts                int
 	HostsUp                   int
@@ -466,24 +481,21 @@ type DashboardSummary struct {
 	TotalVulnerabilitiesCount int
 }
 
-// GetDashboardSummary retrieves summary statistics for a given campaign.
 func GetDashboardSummary(campaignID int64) (*DashboardSummary, error) {
 	summary := &DashboardSummary{}
+	var err error
 
-	// Get total hosts
-	err := DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ?", campaignID).Scan(&summary.TotalHosts)
+	err = DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ?", campaignID).Scan(&summary.TotalHosts)
 	if err != nil {
-		return nil, fmt.Errorf("could not count hosts: %w", err)
+		return nil, fmt.Errorf("could not count total hosts for dashboard: %w", err)
 	}
 
-	// Get hosts up/down
 	err = DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ? AND status = 'up'", campaignID).Scan(&summary.HostsUp)
 	if err != nil {
-		return nil, fmt.Errorf("could not count up hosts: %w", err)
+		return nil, fmt.Errorf("could not count 'up' hosts for dashboard: %w", err)
 	}
 	summary.HostsDown = summary.TotalHosts - summary.HostsUp
 
-	// Get most common ports
 	rows, err := DB.Query(`
 		SELECT p.port_number
 		FROM ports p
@@ -493,59 +505,58 @@ func GetDashboardSummary(campaignID int64) (*DashboardSummary, error) {
 		ORDER BY COUNT(p.port_number) DESC
 		LIMIT 5`, campaignID)
 	if err != nil {
-		return nil, fmt.Errorf("could not get common ports: %w", err)
+		return nil, fmt.Errorf("could not get common ports for dashboard: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var port string
 		if err := rows.Scan(&port); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan common port for dashboard: %w", err)
 		}
 		summary.MostCommonPorts = append(summary.MostCommonPorts, port)
 	}
 
-	// Get vulnerability counts
 	err = DB.QueryRow("SELECT COUNT(*) FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id WHERE h.campaign_id = ? AND v.category = ?", campaignID, model.CriticalFinding).Scan(&summary.CriticalVulnCount)
 	if err != nil {
-		return nil, fmt.Errorf("could not count critical vulnerabilities: %w", err)
+		return nil, fmt.Errorf("could not count critical vulnerabilities for dashboard: %w", err)
 	}
 	err = DB.QueryRow("SELECT COUNT(*) FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id WHERE h.campaign_id = ? AND v.category = ?", campaignID, model.PotentialFinding).Scan(&summary.PotentialVulnCount)
 	if err != nil {
-		return nil, fmt.Errorf("could not count potential vulnerabilities: %w", err)
+		return nil, fmt.Errorf("could not count potential vulnerabilities for dashboard: %w", err)
 	}
 	err = DB.QueryRow("SELECT COUNT(*) FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id WHERE h.campaign_id = ? AND v.category = ?", campaignID, model.InformationalFinding).Scan(&summary.InformationalVulnCount)
 	if err != nil {
-		return nil, fmt.Errorf("could not count informational vulnerabilities: %w", err)
+		return nil, fmt.Errorf("could not count informational vulnerabilities for dashboard: %w", err)
 	}
 
 	summary.TotalVulnerabilitiesCount = summary.CriticalVulnCount + summary.PotentialVulnCount + summary.InformationalVulnCount
 
 	err = DB.QueryRow("SELECT COUNT(*) FROM handshakes WHERE campaign_id = ?", campaignID).Scan(&summary.CapturedHandshakesCount)
 	if err != nil {
-		return nil, fmt.Errorf("could not count handshakes: %w", err)
+		return nil, fmt.Errorf("could not count handshakes for dashboard: %w", err)
 	}
 
 	return summary, nil
 }
 
-// NEW: HandshakeInfo is a struct for displaying handshakes in the UI.
 type HandshakeInfo struct {
 	ID        int64
 	APMAC     string
 	ClientMAC string
 	SSID      string
 	PcapFile  string
-	HCCAPX    string // The hex-encoded data for display
+	HCCAPX    string
 }
 
-// NEW: CountHandshakesByCampaign returns the total number of handshakes for a campaign.
 func CountHandshakesByCampaign(campaignID int64) (int, error) {
 	var count int
 	err := DB.QueryRow("SELECT COUNT(*) FROM handshakes WHERE campaign_id = ?", campaignID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("could not count handshakes for campaign %d: %w", campaignID, err)
+	}
 	return count, err
 }
 
-// RENAMED & UPDATED: This function is now paginated.
 func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]HandshakeInfo, error) {
 	rows, err := DB.Query(`
 		SELECT id, ap_mac, client_mac, ssid, pcap_file, hccapx_data
@@ -554,7 +565,7 @@ func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]Ha
 		ORDER BY id DESC
 		LIMIT ? OFFSET ?`, campaignID, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not query paginated handshakes for campaign %d: %w", campaignID, err)
 	}
 	defer rows.Close()
 
@@ -563,7 +574,7 @@ func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]Ha
 		var h HandshakeInfo
 		var hccapxData []byte
 		if err := rows.Scan(&h.ID, &h.APMAC, &h.ClientMAC, &h.SSID, &h.PcapFile, &hccapxData); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not scan paginated handshake row: %w", err)
 		}
 		h.HCCAPX = hex.EncodeToString(hccapxData)
 		handshakes = append(handshakes, h)
