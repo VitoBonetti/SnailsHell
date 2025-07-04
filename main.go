@@ -5,6 +5,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"gonetmap/config"
 	"gonetmap/functions"
 	"gonetmap/model"
 	"gonetmap/storage"
@@ -28,8 +29,14 @@ import (
 var templatesFS embed.FS
 
 func main() {
+	// NEW: Load configuration from config.yaml at the very beginning.
+	if err := config.LoadConfig(); err != nil {
+		log.Fatalf("FATAL: Could not load configuration: %v", err)
+	}
+
 	// --- 1. Initialize backend services ---
-	if err := storage.InitDB("gonetmap.db"); err != nil {
+	// FIX: Use the database path from the loaded configuration.
+	if err := storage.InitDB(config.Cfg.Database.Path); err != nil {
 		log.Fatalf("FATAL: Could not initialize database: %v", err)
 	}
 	if err := functions.InitMac(); err != nil {
@@ -40,9 +47,9 @@ func main() {
 	campaignName := flag.String("campaign", "", "Name of the campaign to scan and add data to.")
 	openCampaignName := flag.String("open", "", "Name of the campaign to open in the web UI without running a new scan.")
 	listCampaigns := flag.Bool("list", false, "List all existing campaigns.")
-	dataDir := flag.String("dir", "./data", "Directory containing Nmap XML and Pcap files.")
+	// FIX: The default value for the data directory now comes from the config file.
+	dataDir := flag.String("dir", config.Cfg.DefaultPaths.DataDir, "Directory containing Nmap XML and Pcap files.")
 
-	// Flags for live capture
 	liveCapture := flag.Bool("live", false, "Enable live packet capture mode.")
 	iface := flag.String("iface", "", "Interface to capture packets from (use -live to see options).")
 
@@ -50,7 +57,6 @@ func main() {
 
 	// --- 3. Handle different modes ---
 
-	// Live capture mode
 	if *liveCapture {
 		if *iface == "" {
 			if err := functions.ListInterfaces(); err != nil {
@@ -113,18 +119,11 @@ func handleLiveCapture(campaignName, interfaceName string) {
 		}
 	}()
 
-	// Set up the signal channel
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-
-	// Block until a signal is received
 	<-c
-
-	// FIX: Deregister the custom signal handler. This restores the default
-	// behavior for subsequent Ctrl+C presses, allowing the program to terminate.
 	signal.Stop(c)
 
-	// Signal the capture goroutine to stop
 	fmt.Println("\n🛑 Stopping capture...")
 	cancel()
 	wg.Wait()
