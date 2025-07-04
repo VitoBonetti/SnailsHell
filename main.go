@@ -52,21 +52,15 @@ func main() {
 
 	// Live capture mode
 	if *liveCapture {
-		// FIX: If no interface is specified, the user just wants to see the list.
-		// This check must come BEFORE the campaign name check.
 		if *iface == "" {
 			if err := functions.ListInterfaces(); err != nil {
 				log.Fatalf("FATAL: Could not list network interfaces: %v", err)
 			}
-			return // Exit after listing interfaces
+			return
 		}
-
-		// If an interface IS specified, we now need a campaign name.
 		if *campaignName == "" {
 			log.Fatalf("FATAL: A campaign name is required when specifying an interface. Use the -campaign flag.")
 		}
-
-		// If we have both an interface and a campaign, start the capture.
 		handleLiveCapture(*campaignName, *iface)
 		return
 	}
@@ -119,10 +113,18 @@ func handleLiveCapture(campaignName, interfaceName string) {
 		}
 	}()
 
+	// Set up the signal channel
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	// Block until a signal is received
 	<-c
 
+	// FIX: Deregister the custom signal handler. This restores the default
+	// behavior for subsequent Ctrl+C presses, allowing the program to terminate.
+	signal.Stop(c)
+
+	// Signal the capture goroutine to stop
 	fmt.Println("\n🛑 Stopping capture...")
 	cancel()
 	wg.Wait()
