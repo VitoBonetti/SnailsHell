@@ -2,179 +2,238 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>goNetMap Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>goNetMap - {{ .Campaign.Name }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/1.6.5/flowbite.min.css" rel="stylesheet" />
     <style>
-        body { background-color: #f0f2f5; }
-        .campaign-card { background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,.1); }
-        .summary-card { text-align: center; padding: 20px; }
-        .summary-card .icon { font-size: 2rem; }
-        .summary-card h5 { margin-top: 10px; font-weight: 600; }
-        .host-card {
-            background-color: #fff;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,.05);
-            transition: all 0.2s ease-in-out;
-            cursor: pointer;
-        }
-        .host-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 4px 8px rgba(0,0,0,.1);
+        body { background-color: #111827; color: #d1d5db; }
+        .card { background-color: #1f2937; border-color: #374151; }
+        .stat-card { background-color: #374151; }
+        .btn-filter.active { background-color: #3b82f6; color: white; }
+        select {
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+            background-position: right 0.5rem center;
+            background-repeat: no-repeat;
+            background-size: 1.5em 1.5em;
+            padding-right: 2.5rem;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
         }
     </style>
 </head>
-<body>
-    <div class="container-fluid mt-4">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h2 class="text-dark-emphasis"><i class="bi bi-radar"></i> goNetMap</h2>
-            <div class="d-flex align-items-center">
-                <label for="campaign-switcher" class="form-label me-2 mb-0">Switch Campaign:</label>
-                <select class="form-select" id="campaign-switcher" style="width: 250px;" onchange="switchCampaign(this.value)">
+<body class="font-sans">
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <!-- Header -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
+            <div>
+                <h1 class="text-3xl font-bold text-white">Campaign: {{ .Campaign.Name }}</h1>
+                <p class="text-gray-400">Created: {{ .Campaign.CreatedAt.Format "Jan 02, 2006 15:04:05" }}</p>
+            </div>
+            <div class="mt-4 sm:mt-0 flex items-center gap-4">
+                <a href="/" class="text-blue-400 hover:text-blue-300">&larr; All Campaigns</a>
+                <!-- NEW: Campaign Switcher -->
+                <select id="campaign-switcher" class="bg-gray-700 border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                    <option>Switch Campaign...</option>
                     {{range .AllCampaigns}}
-                        <option value="{{.ID}}" {{if eq .ID $.Campaign.ID}}selected{{end}}>
-                            {{.Name}}
-                        </option>
+                        {{if ne .ID $.Campaign.ID}}
+                            <option value="{{.ID}}">{{.Name}}</option>
+                        {{end}}
                     {{end}}
                 </select>
             </div>
         </div>
 
-        <div class="p-4 mb-4 campaign-card">
-            <h3 class="alert-heading"><i class="bi bi-box-arrow-in-right"></i> Campaign: {{ .Campaign.Name }}</h3>
-            <p>Created on: <span class="fw-bold">{{.Campaign.CreatedAt.Format "Monday, January 2, 2006"}}</span></p>
-            <hr>
-            <div class="row">
-                <div class="col-md-1">
-                    <div class="summary-card">
-                        <div class="icon text-primary"><i class="bi bi-hdd-stack"></i></div>
-                        <h5>{{ .Summary.TotalHosts }}</h5>
-                        <div class="text-secondary">Total Hosts</div>
-                    </div>
+        <!-- Summary Stats -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+            <div class="stat-card p-4 rounded-lg text-center">
+                <p class="text-3xl font-bold text-white">{{.Summary.TotalHosts}}</p>
+                <p class="text-gray-400">Total Hosts</p>
+            </div>
+            <div class="stat-card p-4 rounded-lg text-center">
+                <p class="text-3xl font-bold text-green-400">{{.Summary.HostsUp}}</p>
+                <p class="text-gray-400">Hosts Up</p>
+            </div>
+            <div class="stat-card p-4 rounded-lg text-center">
+                <p class="text-3xl font-bold text-red-400">{{.Summary.HostsDown}}</p>
+                <p class="text-gray-400">Hosts Down</p>
+            </div>
+            <div class="stat-card p-4 rounded-lg text-center">
+                <p class="text-3xl font-bold text-red-500">{{.Summary.CriticalVulnCount}}</p>
+                <p class="text-gray-400">Critical Vulns</p>
+            </div>
+            <div class="stat-card p-4 rounded-lg text-center">
+                <p class="text-3xl font-bold text-yellow-500">{{.Summary.PotentialVulnCount}}</p>
+                <p class="text-gray-400">Potential Vulns</p>
+            </div>
+             <div class="stat-card p-4 rounded-lg text-center">
+                <a href="/campaign/{{.Campaign.ID}}/handshakes" class="block">
+                    <p class="text-3xl font-bold text-purple-400">{{.Summary.CapturedHandshakesCount}}</p>
+                    <p class="text-gray-400 hover:text-white">Handshakes</p>
+                </a>
+            </div>
+        </div>
+
+        <!-- Search and Filter Controls -->
+        <div class="card p-4 rounded-lg mb-6">
+            <div class="flex flex-col md:flex-row gap-4">
+                <div class="flex-grow">
+                    <label for="search-input" class="sr-only">Search</label>
+                    <input type="text" id="search-input" class="w-full bg-gray-700 border-gray-600 text-white rounded-lg focus:ring-blue-500 focus:border-blue-500" placeholder="Search by IP, MAC, Vendor...">
                 </div>
-                <div class="col-md-1">
-                    <div class="summary-card">
-                        <div class="icon text-success"><i class="bi bi-wifi"></i></div>
-                        <h5>{{ .Summary.HostsUp }}</h5>
-                        <div class="text-secondary">Hosts Up</div>
-                    </div>
-                </div>
-                <div class="col-md-1">
-                    <div class="summary-card">
-                        <div class="icon text-danger"><i class="bi bi-wifi-off"></i></div>
-                        <h5>{{ .Summary.HostsDown }}</h5>
-                        <div class="text-secondary">Hosts Down</div>
-                    </div>
-                </div>
-                <div class="col-md-1">
-                    <div class="summary-card">
-                        <div class="icon text-warning"><i class="bi bi-shield-exclamation"></i></div>
-                        <h5>{{ .Summary.TotalVulnerabilitiesCount }}</h5>
-                        <div class="text-secondary">Vulnerabilities</div>
-                    </div>
-                </div>
-                <div class="col-md-1">
-                    <div class="summary-card">
-                        <div class="icon" style="color: #6f42c1;"><i class="bi bi-key-fill"></i></div>
-                        <h5>{{ .Summary.CapturedHandshakesCount }}</h5>
-                        <div class="text-secondary"><a href="/campaign/{{.Campaign.ID}}/handshakes" class="text-secondary">Handshakes</a></div>
-                    </div>
-                </div>
-                <div class="col-md-7">
-                    <div class="summary-card">
-                         <div class="icon text-info"><i class="bi bi-door-open"></i></div>
-                         <h5>Most Common Ports</h5>
-                         <p class="text-secondary">
-                            {{range .Summary.MostCommonPorts}}
-                                <span class="badge bg-info me-1">{{.}}</span>
-                            {{else}}
-                                No open ports found.
-                            {{end}}
-                         </p>
-                    </div>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-gray-400 font-semibold">Filter by:</span>
+                    <button class="btn-filter px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-500" data-filter="all">All</button>
+                    <button class="btn-filter px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-500" data-filter="up">Up</button>
+                    <button class="btn-filter px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-500" data-filter="down">Down</button>
+                    <button class="btn-filter px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-500" data-filter="vulns">Has Vulns</button>
                 </div>
             </div>
         </div>
 
-        <h3 class="mb-3">Discovered Hosts</h3>
-        <div class="row g-4" id="hosts-container">
-            </div>
 
-        <nav class="mt-4">
-            <ul class="pagination justify-content-center" id="pagination-controls"></ul>
-        </nav>
+        <!-- Hosts List -->
+        <div id="hosts-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Host cards will be injected here by JavaScript -->
+        </div>
+
+        <!-- Pagination -->
+        <div id="pagination-controls" class="flex justify-center items-center mt-8 space-x-4">
+            <!-- Pagination buttons will be injected here -->
+        </div>
     </div>
 
     <script>
-        // Get the campaign ID from the template to use in API calls
-        const campaignId = '{{ .Campaign.ID }}';
+        // Safely get campaign ID
+        const campaignID = "{{.Campaign.ID}}";
+        let currentPage = 1;
+        let currentSearch = '';
+        let currentFilter = 'all'; // Default filter
 
-        function switchCampaign(newCampaignId) {
-            window.location.href = `/campaign/${newCampaignId}/`;
-        }
-
-        const hostsContainer = document.getElementById('hosts-container');
+        const hostsGrid = document.getElementById('hosts-grid');
         const paginationControls = document.getElementById('pagination-controls');
+        const searchInput = document.getElementById('search-input');
+        const filterButtons = document.querySelectorAll('.btn-filter');
+        const campaignSwitcher = document.getElementById('campaign-switcher');
 
-        function loadPage(page) {
-            // CORRECTED Fetch URL
-            fetch(`/api/campaign/${campaignId}/hosts?page=${page}`)
-                .then(response => response.json())
-                .then(data => {
-                    hostsContainer.innerHTML = ''; // Clear previous content
-
-                    if (data.hosts && data.hosts.length > 0) {
-                        data.hosts.forEach(host => {
-                            const col = document.createElement('div');
-                            col.className = 'col-md-4';
-                            // CORRECTED onclick handler to build the right URL
-                            col.innerHTML = `
-                                <div class="host-card p-3" onclick="window.location='/campaign/${campaignId}/hosts/${host.id}'">
-                                    <div class="d-flex justify-content-between align-items-center">
-                                        <h5 class="mb-0">${host.mac_address}</h5>
-                                        <span class="badge ${host.status === 'up' ? 'bg-success' : 'bg-danger'}">${host.status}</span>
-                                    </div>
-                                    <p class="text-secondary mb-2">${host.vendor || 'Unknown Vendor'}</p>
-                                    <div class="d-flex justify-content-between">
-                                        <span><i class="bi bi-pc-display-horizontal"></i> ${host.ip_address}</span>
-                                        <span><i class="bi bi-tag"></i> ${host.device_type || 'Generic Device'}</span>
-                                    </div>
-                                </div>
-                            `;
-                            hostsContainer.appendChild(col);
-                        });
-                    } else {
-                        hostsContainer.innerHTML = '<div class="col text-center"><p>No hosts found for this campaign.</p></div>';
-                    }
-
-                    renderPagination(data.currentPage, data.totalPages);
-                })
-                .catch(error => console.error('Error fetching host data:', error));
+        async function fetchHosts(page = 1, search = '', filter = 'all') {
+            try {
+                // Show a loading state
+                hostsGrid.innerHTML = '<p class="text-center col-span-full">Loading hosts...</p>';
+                
+                const response = await fetch(`/api/campaign/${campaignID}/hosts?page=${page}&search=${search}&filter=${filter}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                renderHosts(data.hosts);
+                renderPagination(data.totalPages, data.currentPage);
+            } catch (error) {
+                hostsGrid.innerHTML = `<p class="text-center col-span-full text-red-400">Error loading hosts: ${error.message}</p>`;
+            }
         }
 
-        function renderPagination(currentPage, totalPages) {
+        function renderHosts(hosts) {
+            hostsGrid.innerHTML = ''; // Clear previous hosts
+            if (!hosts || hosts.length === 0) {
+                hostsGrid.innerHTML = '<p class="text-center col-span-full">No hosts found for the current filter.</p>';
+                return;
+            }
+
+            hosts.forEach(host => {
+                const statusColor = host.status === 'up' ? 'text-green-400' : 'text-red-400';
+                const statusText = host.status === 'up' ? 'UP' : 'DOWN';
+                const card = `
+                    <a href="/campaign/${campaignID}/hosts/${host.id}" class="block card rounded-lg p-4 hover:bg-gray-700 transition duration-200">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="font-mono text-lg text-white">${host.ip_address || 'N/A'}</p>
+                                <p class="font-mono text-sm text-gray-400">${host.mac_address}</p>
+                            </div>
+                            <span class="text-sm font-bold ${statusColor}">${statusText}</span>
+                        </div>
+                        <div class="mt-2">
+                            <p class="text-gray-300">${host.vendor || 'Unknown Vendor'}</p>
+                            ${host.has_vulns ? '<p class="text-xs font-bold text-yellow-400 mt-1">Vulnerabilities Detected</p>' : ''}
+                        </div>
+                    </a>
+                `;
+                hostsGrid.innerHTML += card;
+            });
+        }
+
+        function renderPagination(totalPages, page) {
             paginationControls.innerHTML = '';
             if (totalPages <= 1) return;
 
-            const prevLi = document.createElement('li');
-            prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
-            prevLi.innerHTML = `<a class="page-link" href="#" onclick="event.preventDefault(); loadPage(${currentPage - 1});">Previous</a>`;
-            paginationControls.appendChild(prevLi);
+            // Previous Button
+            const prevButton = document.createElement('button');
+            prevButton.innerText = 'Previous';
+            prevButton.disabled = page === 1;
+            prevButton.className = 'px-4 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed';
+            prevButton.onclick = () => {
+                currentPage--;
+                fetchHosts(currentPage, currentSearch, currentFilter);
+            };
+            paginationControls.appendChild(prevButton);
 
-            for (let i = 1; i <= totalPages; i++) {
-                const pageLi = document.createElement('li');
-                pageLi.className = `page-item ${i === currentPage ? 'active' : ''}`;
-                pageLi.innerHTML = `<a class="page-link" href="#" onclick="event.preventDefault(); loadPage(${i});">${i}</a>`;
-                paginationControls.appendChild(pageLi);
-            }
+            // Page Info
+            const pageInfo = document.createElement('span');
+            pageInfo.innerText = `Page ${page} of ${totalPages}`;
+            pageInfo.className = 'text-gray-300';
+            paginationControls.appendChild(pageInfo);
 
-            const nextLi = document.createElement('li');
-            nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
-            nextLi.innerHTML = `<a class="page-link" href="#" onclick="event.preventDefault(); loadPage(${currentPage + 1});">Next</a>`;
-            paginationControls.appendChild(nextLi);
+            // Next Button
+            const nextButton = document.createElement('button');
+            nextButton.innerText = 'Next';
+            nextButton.disabled = page === totalPages;
+            nextButton.className = 'px-4 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed';
+            nextButton.onclick = () => {
+                currentPage++;
+                fetchHosts(currentPage, currentSearch, currentFilter);
+            };
+            paginationControls.appendChild(nextButton);
         }
 
-        document.addEventListener('DOMContentLoaded', () => loadPage(1));
+        // Event Listeners
+        searchInput.addEventListener('input', (e) => {
+            // Basic debouncing
+            setTimeout(() => {
+                if (currentSearch === e.target.value) {
+                    currentPage = 1; // Reset to first page on new search
+                    fetchHosts(currentPage, currentSearch, currentFilter);
+                }
+            }, 300);
+            currentSearch = e.target.value;
+        });
+
+        filterButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                // Update active state
+                filterButtons.forEach(btn => btn.classList.remove('active'));
+                button.classList.add('active');
+                
+                currentFilter = button.dataset.filter;
+                currentPage = 1; // Reset to first page
+                fetchHosts(currentPage, currentSearch, currentFilter);
+            });
+        });
+        
+        campaignSwitcher.addEventListener('change', (e) => {
+            const newCampaignID = e.target.value;
+            if (newCampaignID) {
+                window.location.href = `/campaign/${newCampaignID}/`;
+            }
+        });
+
+        // Initial fetch
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelector('.btn-filter[data-filter="all"]').classList.add('active');
+            fetchHosts(currentPage, currentSearch, currentFilter);
+        });
+
     </script>
 </body>
 </html>

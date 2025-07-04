@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"flag"
 	"fmt"
 	"gonetmap/functions"
@@ -20,6 +21,9 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/pkg/browser"
 )
+
+//go:embed templates/*
+var templatesFS embed.FS
 
 func main() {
 	// --- 1. Initialize backend services ---
@@ -55,12 +59,12 @@ func main() {
 			log.Fatalf("Error finding campaign '%s': %v", *openCampaignName, err)
 		}
 		fmt.Printf("✅ Opening Campaign: '%s' (ID: %d)\n", *openCampaignName, campaignID)
-		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID))
+		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
 		return
 	}
 
 	fmt.Println("✅ No specific campaign requested. Starting server...")
-	launchServerAndBrowser("http://localhost:8080/")
+	launchServerAndBrowser("http://localhost:8080/", templatesFS)
 }
 
 // processFiles handles the core logic of parsing and enrichment concurrently.
@@ -498,13 +502,13 @@ func handleScanCampaign(name, dataDir string) {
 	}
 
 	fmt.Println("\n✅ Scan complete. Starting server and opening browser...")
-	launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID))
+	launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
 }
 
 // launchServerAndBrowser starts the server in a goroutine and opens a URL.
 // It then blocks forever to keep the main program alive.
-func launchServerAndBrowser(url string) {
-	go functions.StartServer()
+func launchServerAndBrowser(url string, fs embed.FS) {
+	go functions.StartServer(fs)
 	if url != "" {
 		browser.OpenURL(url)
 	}

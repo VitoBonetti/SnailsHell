@@ -265,14 +265,14 @@ func GetOrCreateCampaign(name string) (int64, error) {
 
 // HostInfo is a simplified struct for display in the UI.
 type HostInfo struct {
-	ID              int64  `json:"id"`
-	MACAddress      string `json:"mac_address"`
-	IPAddress       string `json:"ip_address"`
-	Vendor          string `json:"vendor"`
-	Status          string `json:"status"`
-	DiscoveredBy    string `json:"discovered_by"`
-	DeviceType      string `json:"device_type"`
-	BehavioralClues string `json:"behavioral_clues"`
+	ID           int64  `json:"id"`
+	MACAddress   string `json:"mac_address"`
+	IPAddress    string `json:"ip_address"`
+	Vendor       string `json:"vendor"`
+	Status       string `json:"status"`
+	DiscoveredBy string `json:"discovered_by"`
+	DeviceType   string `json:"device_type"`
+	HasVulns     bool   `json:"has_vulns"` // New field
 }
 
 // GetHostsByCampaign retrieves a list of all hosts for a given campaign.
@@ -320,8 +320,8 @@ func ListCampaigns() ([]CampaignInfo, error) {
 	return campaigns, nil
 }
 
-// GetHostByID retrieves all details for a single host, correctly handling nested data.
-func GetHostByID(hostID int64) (*model.Host, error) {
+// GetHostByID retrieves all details for a single host, but only if it belongs to the specified campaign.
+func GetHostByID(hostID int64, campaignID int64) (*model.Host, error) {
 	host := &model.Host{
 		Ports:          make(map[int]model.Port),
 		IPv4Addresses:  make(map[string]bool),
@@ -334,15 +334,16 @@ func GetHostByID(hostID int64) (*model.Host, error) {
 	host.ID = hostID
 	var ipAddress, vendor, osGuess, deviceType, clues string
 
+	// FIX: Add campaign_id to the query to ensure the host belongs to the correct campaign.
 	err := DB.QueryRow(`
 		SELECT mac_address, ip_address, vendor, os_guess, status, device_type, behavioral_clues
-		FROM hosts WHERE id = ?`, hostID).Scan(
+		FROM hosts WHERE id = ? AND campaign_id = ?`, hostID, campaignID).Scan(
 		&host.MACAddress, &ipAddress, &vendor, &osGuess, &host.Status, &deviceType, &clues,
 	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("host with ID %d not found", hostID)
+			return nil, fmt.Errorf("host with ID %d not found in campaign %d", hostID, campaignID)
 		}
 		return nil, fmt.Errorf("error querying host %d: %w", hostID, err)
 	}
@@ -442,24 +443,75 @@ func GetCampaignByID(id int64) (*CampaignInfo, error) {
 	return &c, nil
 }
 
-func GetHostsByCampaignPaginated(campaignID int64, limit, offset int) ([]HostInfo, error) {
-	rows, err := DB.Query("SELECT id, mac_address, ip_address, vendor, status, discovered_by, device_type, behavioral_clues FROM hosts WHERE campaign_id = ? ORDER BY ip_address DESC LIMIT ? OFFSET ?", campaignID, limit, offset)
+// GetHostsByCampaignPaginated retrieves a specific "page" of hosts with search and filtering.
+func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, filter string) ([]HostInfo, int, error) {
+	var hosts []HostInfo
+	var totalHosts int
+
+	// Base query
+	baseQuery := `
+        FROM hosts h
+        LEFT JOIN vulnerabilities v ON h.id = v.host_id
+        WHERE h.campaign_id = ?
+    `
+	args := []interface{}{campaignID}
+
+	// Apply filters
+	var conditions []string
+	if filter == "up" {
+		conditions = append(conditions, "h.status = 'up'")
+	} else if filter == "down" {
+		// A host is "down" if its status is explicitly 'down' OR if it has no status (e.g., from pcap only)
+		conditions = append(conditions, "(h.status = 'down' OR h.status = '')")
+	} else if filter == "vulns" {
+		conditions = append(conditions, "v.id IS NOT NULL")
+	}
+
+	// Apply search term
+	if search != "" {
+		searchCondition := "(h.ip_address LIKE ? OR h.mac_address LIKE ? OR h.vendor LIKE ?)"
+		conditions = append(conditions, searchCondition)
+		searchTerm := "%" + search + "%"
+		args = append(args, searchTerm, searchTerm, searchTerm)
+	}
+
+	if len(conditions) > 0 {
+		baseQuery += " AND " + strings.Join(conditions, " AND ")
+	}
+
+	// Count total matching hosts
+	countQuery := "SELECT COUNT(DISTINCT h.id) " + baseQuery
+	err := DB.QueryRow(countQuery, args...).Scan(&totalHosts)
 	if err != nil {
-		return nil, fmt.Errorf("could not query paginated hosts for campaign %d: %w", campaignID, err)
+		return nil, 0, fmt.Errorf("could not count filtered hosts: %w", err)
+	}
+
+	// Get paginated hosts
+	selectQuery := `
+        SELECT DISTINCT h.id, h.mac_address, h.ip_address, h.vendor, h.status,
+        (CASE WHEN EXISTS (SELECT 1 FROM vulnerabilities WHERE host_id = h.id) THEN 1 ELSE 0 END) as has_vulns
+    ` + baseQuery + " ORDER BY h.ip_address DESC, h.id DESC LIMIT ? OFFSET ?"
+
+	args = append(args, limit, offset)
+
+	rows, err := DB.Query(selectQuery, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("could not query paginated hosts: %w", err)
 	}
 	defer rows.Close()
 
-	var hosts []HostInfo
 	for rows.Next() {
 		var h HostInfo
-		if err := rows.Scan(&h.ID, &h.MACAddress, &h.IPAddress, &h.Vendor, &h.Status, &h.DiscoveredBy, &h.DeviceType, &h.BehavioralClues); err != nil {
-			return nil, fmt.Errorf("could not scan paginated host row: %w", err)
+		if err := rows.Scan(&h.ID, &h.MACAddress, &h.IPAddress, &h.Vendor, &h.Status, &h.HasVulns); err != nil {
+			return nil, 0, fmt.Errorf("could not scan paginated host row: %w", err)
 		}
 		hosts = append(hosts, h)
 	}
-	return hosts, nil
+
+	return hosts, totalHosts, nil
 }
 
+// CountHostsByCampaign returns the total number of hosts for a campaign.
 func CountHostsByCampaign(campaignID int64) (int, error) {
 	var count int
 	err := DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE campaign_id = ?", campaignID).Scan(&count)

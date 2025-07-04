@@ -2,179 +2,195 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Host Details: {{ .Host.MACAddress }}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Host Details - {{ .Host.MACAddress }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css" rel="stylesheet" type="text/css" />
     <style>
-        body { background-color: #f0f2f5; }
-        .details-card {
-            background-color: #fff;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,.1);
-            margin-bottom: 1.5rem;
-        }
-        .mermaid {
-            text-align: center;
-            margin-top: 20px;
-        }
-        /* NEW: Style for scrollable tables */
-        .table-container {
-            max-height: 400px; /* Adjust height as needed */
-            overflow-y: auto;
-        }
+        body { background-color: #111827; color: #d1d5db; }
+        .card { background-color: #1f2937; border: 1px solid #374151; }
+        .table-header { background-color: #374151; }
+        .table-row { border-color: #374151; }
+        #comm-graph { height: 400px; background-color: #1f2937; border-radius: 0.5rem; }
+        .vis-text { color: #d1d5db !important; }
     </style>
 </head>
-<body>
-    <div class="container mt-4">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <a href="/campaign/{{.CampaignID}}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Dashboard</a>
-        </div>
+<body class="font-sans">
 
-        <div class="p-4 details-card">
-            <div class="d-flex align-items-center">
-                <i class="bi bi-pc-display-horizontal me-3" style="font-size: 2.5rem;"></i>
-                <div>
-                    <h2 class="mb-0">{{ .Host.MACAddress }}</h2>
-                    <p class="text-muted mb-0">
-                        {{range $ip, $val := .Host.IPv4Addresses}}{{$ip}}{{end}}
-                    </p>
-                </div>
-                <span class="ms-auto badge fs-6 {{if eq .Host.Status "up"}}bg-success{{else}}bg-danger{{end}}">{{ .Host.Status }}</span>
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <!-- Header -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
+            <div>
+                <h1 class="text-3xl font-mono text-white">{{ .Host.MACAddress }}</h1>
+                <p class="text-lg text-gray-400">{{ range $ip, $_ := .Host.IPv4Addresses }}{{ $ip }}{{ end }}</p>
             </div>
+            <a href="/campaign/{{.CampaignID}}" class="mt-4 sm:mt-0 text-blue-400 hover:text-blue-300">&larr; Back to Dashboard</a>
         </div>
 
-        <div class="row">
-            <div class="col-md-6">
-                <div class="details-card p-4">
-                    <h4><i class="bi bi-fingerprint me-2"></i> Device Fingerprint</h4>
-                    <hr>
-                    <ul class="list-group list-group-flush">
-                        <li class="list-group-item"><strong>Vendor:</strong> {{if .Host.Fingerprint.Vendor}}{{.Host.Fingerprint.Vendor}}{{else}}Not Available{{end}}</li>
-                        <li class="list-group-item"><strong>OS Guess:</strong> {{if .Host.Fingerprint.OperatingSystem}}{{.Host.Fingerprint.OperatingSystem}}{{else}}Not Available{{end}}</li>
-                        <li class="list-group-item"><strong>Device Type:</strong> {{if .Host.Fingerprint.DeviceType}}{{.Host.Fingerprint.DeviceType}}{{else}}Not Available{{end}}</li>
+        <!-- Top Grid for Host Info & Ports -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+            <!-- Host Info Card -->
+            <div class="lg:col-span-1 space-y-6">
+                <div class="card rounded-lg p-4">
+                    <h2 class="text-xl font-bold text-white mb-3">Host Information</h2>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="font-semibold text-gray-400">Status:</span>
+                            <span class="font-mono {{if eq .Host.Status "up"}}text-green-400{{else}}text-red-400{{end}}">{{ upper .Host.Status }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-semibold text-gray-400">Vendor:</span>
+                            <span class="text-right">{{ default "N/A" .Host.Fingerprint.Vendor }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-semibold text-gray-400">OS Guess:</span>
+                            <span class="text-right">{{ default "N/A" .Host.Fingerprint.OperatingSystem }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-semibold text-gray-400">Device Type:</span>
+                            <span class="text-right">{{ default "N/A" .Host.Fingerprint.DeviceType }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                 <!-- DNS Lookups Card -->
+                {{if .Host.DNSLookups}}
+                <div class="card rounded-lg p-4">
+                    <h2 class="text-xl font-bold text-white mb-3">DNS Lookups</h2>
+                    <ul class="space-y-1 list-disc list-inside text-sm">
+                        {{range $domain, $_ := .Host.DNSLookups}}
+                        <li><span class="font-mono">{{$domain}}</span></li>
+                        {{end}}
                     </ul>
                 </div>
-
-                <div class="details-card p-4">
-                     <h4><i class="bi bi-search me-2"></i> DNS Lookups</h4>
-                     <hr>
-                     {{if .Host.DNSLookups}}
-                         <div class="table-container"> <ul class="list-group list-group-flush">
-                             {{range $domain, $val := .Host.DNSLookups}}
-                                 <li class="list-group-item">{{$domain}}</li>
-                             {{end}}
-                             </ul>
-                         </div>
-                     {{else}}
-                         <p class="text-center text-muted">No DNS lookups were observed.</p>
-                     {{end}}
-                </div>
+                {{end}}
             </div>
-
-            <div class="col-md-6">
-                 <div class="details-card p-4">
-                    <h4><i class="bi bi-door-open me-2"></i> Open Ports</h4>
-                    <hr>
-                    <div class="table-container"> <table class="table table-sm table-hover">
-                            <thead class="table-light" style="position: sticky; top: 0;">
-                                <tr><th>Port</th><th>Protocol</th><th>State</th><th>Service</th></tr>
+            
+            <!-- Ports Card -->
+            <div class="lg:col-span-2">
+                {{if .Host.Ports}}
+                <div class="card rounded-lg p-4 h-full">
+                    <h2 class="text-xl font-bold text-white mb-3">Open Ports</h2>
+                    <div class="overflow-y-auto max-h-96">
+                        <table class="w-full text-sm text-left">
+                            <thead class="table-header sticky top-0">
+                                <tr>
+                                    <th class="p-2">Port</th>
+                                    <th class="p-2">Protocol</th>
+                                    <th class="p-2">State</th>
+                                    <th class="p-2">Service & Version</th>
+                                </tr>
                             </thead>
                             <tbody>
                                 {{range .Host.Ports}}
-                                <tr>
-                                    <td>{{.ID}}</td>
-                                    <td>{{.Protocol}}</td>
-                                    <td>
-                                        <span class="badge {{if eq .State "open"}}bg-success{{else if eq .State "closed"}}bg-danger{{else}}bg-secondary{{end}}">{{.State}}</span>
-                                    </td>
-                                    <td>{{.Service}} {{.Version}}</td>
+                                <tr class="table-row">
+                                    <td class="p-2 font-mono">{{.ID}}</td>
+                                    <td class="p-2 font-mono">{{.Protocol}}</td>
+                                    <td class="p-2"><span class="px-2 py-1 rounded-full text-xs {{if eq .State "open"}}bg-green-500/20 text-green-300{{else}}bg-gray-500/20 text-gray-300{{end}}">{{.State}}</span></td>
+                                    <td class="p-2">{{.Service}} {{.Version}}</td>
                                 </tr>
-                                {{else}}
-                                <tr><td colspan="4" class="text-center text-muted">No open ports found.</td></tr>
                                 {{end}}
                             </tbody>
                         </table>
                     </div>
                 </div>
+                {{end}}
             </div>
         </div>
 
-        <div class="details-card p-4">
-            <h4><i class="bi bi-shield-exclamation me-2"></i> Vulnerabilities & Findings</h4>
-            <hr>
+        <!-- Full-Width Sections -->
+        <div class="space-y-6">
+            <!-- Communications Card -->
+            {{if .Host.Communications}}
+            <div class="card rounded-lg p-4">
+                <h2 class="text-xl font-bold text-white mb-3">Communications Graph</h2>
+                <div id="comm-graph"></div>
+            </div>
+            {{end}}
+
+            <!-- Vulnerabilities Section -->
             {{if .Host.Findings}}
-                 <div class="table-container">
-                    {{range $category, $vulns := .Host.Findings}}
-                        <h5 class="mt-3">
-                            {{if eq $category "Critical Vulnerabilities"}}<span class="badge bg-danger">Critical</span>
-                            {{else if eq $category "Potential Weaknesses"}}<span class="badge bg-warning text-dark">Potential</span>
-                            {{else}}<span class="badge bg-info">Informational</span>
-                            {{end}}
-                        </h5>
-                        <ul class="list-group list-group-flush mt-2">
-                            {{range $vulns}}
-                            <li class="list-group-item">
-                                <strong>{{.CVE}}</strong>{{if .PortID}} (Port {{.PortID}}){{end}}
-                                <p class="mb-0 text-muted">{{.Description}}</p>
+            <div class="card rounded-lg p-4">
+                <h2 class="text-xl font-bold text-white mb-3">Vulnerabilities & Findings</h2>
+                <!-- FIX: Make this container scrollable -->
+                <div class="overflow-y-auto max-h-96 space-y-4">
+                    {{range $category, $findings := .Host.Findings}}
+                    <div>
+                        <h3 class="font-semibold text-lg {{if eq $category "Critical"}}text-red-400{{else if eq $category "Potential"}}text-yellow-400{{else}}text-blue-400{{end}}">{{$category}} Findings</h3>
+                        <ul class="list-disc list-inside mt-2 space-y-1">
+                            {{range $findings}}
+                            <li>
+                                <span class="font-bold">{{.CVE}}</span>
+                                {{if .PortID}}(Port {{.PortID}}){{end}}:
+                                <span class="text-gray-300">{{.Description}}</span>
                             </li>
                             {{end}}
                         </ul>
+                    </div>
                     {{end}}
                 </div>
-            {{else}}
-                <p class="text-center text-muted">No vulnerabilities or informational findings were identified.</p>
-            {{end}}
-        </div>
-
-        <div class="details-card p-4">
-            <div class="d-flex justify-content-between align-items-center">
-                <h4 class="mb-0"><i class="bi bi-diagram-3 me-2"></i> Observed Communications</h4>
-                <a href="/campaign/{{.CampaignID}}/hosts/{{.Host.ID}}/communications_graph" class="btn btn-primary btn-sm" target="_blank">
-                    <i class="bi bi-bar-chart-line-fill me-1"></i> Visualize Connections
-                </a>
             </div>
-            <hr>
-            {{if .Host.Communications}}
-                <div class="table-container">
-                    <table class="table table-sm table-hover">
-                        <thead class="table-light" style="position: sticky; top: 0;">
-                            <tr>
-                                <th>Counterpart IP</th>
-                                <th>Packet Count</th>
-                                <th>Location</th>
-                                <th>ISP</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {{range .Host.Communications}}
-                            <tr>
-                                <td>{{.CounterpartIP}}</td>
-                                <td>{{.PacketCount}}</td>
-                                <td>
-                                    {{if .Geo}}
-                                        {{if .Geo.City}}{{.Geo.City}}{{end}}
-                                        {{if and .Geo.City .Geo.Country}}, {{end}}
-                                        {{if .Geo.Country}}{{.Geo.Country}}{{end}}
-                                    {{else}}
-                                        N/A
-                                    {{end}}
-                                </td>
-                                <td>{{if .Geo}}{{.Geo.ISP}}{{else}}N/A{{end}}</td>
-                            </tr>
-                            {{end}}
-                        </tbody>
-                    </table>
-                </div>
-            {{else}}
-                <p class="text-center text-muted">No external communications were observed.</p>
             {{end}}
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
-        mermaid.initialize({ startOnLoad: true });
+        document.addEventListener('DOMContentLoaded', function () {
+            const graphContainer = document.getElementById('comm-graph');
+            if (graphContainer) {
+                fetch('/api/campaign/{{.CampaignID}}/hosts/{{.Host.ID}}/communications')
+                    .then(response => response.json())
+                    .then(data => {
+                        const nodes = new vis.DataSet(data.nodes);
+                        const edges = new vis.DataSet(data.edges);
+                        const graphData = { nodes: nodes, edges: edges };
+                        const options = {
+                            layout: {
+                                hierarchical: false
+                            },
+                            edges: {
+                                color: {
+                                    color: "#6b7280", // gray-500
+                                    highlight: "#9ca3af" // gray-400
+                                },
+                                smooth: {
+                                    enabled: true,
+                                    type: "dynamic"
+                                }
+                            },
+                            nodes: {
+                                shape: 'box',
+                                color: {
+                                    border: '#60a5fa', // blue-400
+                                    background: '#374151', // gray-700
+                                    highlight: {
+                                        border: '#93c5fd', // blue-300
+                                        background: '#4b5563' // gray-600
+                                    }
+                                },
+                                font: {
+                                    color: '#e5e7eb', // gray-200
+                                    size: 14,
+                                }
+                            },
+                            physics: {
+                                barnesHut: {
+                                    gravitationalConstant: -8000,
+                                    springLength: 95,
+                                    springConstant: 0.04
+                                }
+                            },
+                            interaction: {
+                                hover: true
+                            }
+                        };
+                        new vis.Network(graphContainer, graphData, options);
+                    })
+                    .catch(error => console.error('Error fetching graph data:', error));
+            }
+        });
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/js/bootstrap.bundle.min.js"></script>
+
 </body>
 </html>
