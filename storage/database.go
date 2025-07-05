@@ -193,20 +193,37 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 			}
 		}
 
+		portNumberToDBID := make(map[int]int64)
 		for _, port := range host.Ports {
-			_, err := portStmt.Exec(hostID, port.ID, port.Protocol, port.State, port.Service, port.Version)
+			res, err := portStmt.Exec(hostID, port.ID, port.Protocol, port.State, port.Service, port.Version)
 			if err != nil {
 				return fmt.Errorf("could not save port %d for host %d: %w", port.ID, hostID, err)
 			}
+			portDBID, err := res.LastInsertId()
+			if err != nil {
+				err = tx.QueryRow("SELECT id FROM ports WHERE host_id = ? AND port_number = ? AND protocol = ?", hostID, port.ID, port.Protocol).Scan(&portDBID)
+				if err != nil {
+					return fmt.Errorf("could not get existing port ID for port %d: %w", port.ID, err)
+				}
+			}
+			portNumberToDBID[port.ID] = portDBID
 		}
+
 		for _, findingList := range host.Findings {
 			for _, vuln := range findingList {
-				_, err := vulnStmt.Exec(hostID, nil, vuln.CVE, vuln.Description, vuln.State, vuln.Category)
+				var portDBID sql.NullInt64
+				if vuln.PortID != 0 {
+					if id, ok := portNumberToDBID[vuln.PortID]; ok {
+						portDBID = sql.NullInt64{Int64: id, Valid: true}
+					}
+				}
+				_, err := vulnStmt.Exec(hostID, portDBID, vuln.CVE, vuln.Description, vuln.State, vuln.Category)
 				if err != nil {
 					return fmt.Errorf("could not save vulnerability for host %d: %w", hostID, err)
 				}
 			}
 		}
+
 		for _, comm := range host.Communications {
 			var country, city, isp string
 			if comm.Geo != nil {
@@ -648,11 +665,9 @@ func CountHandshakesByCampaign(campaignID int64) (int, error) {
 	return count, err
 }
 
-// NEW: GetFullHostsForCampaign fetches all hosts and their related data for a campaign.
 func GetFullHostsForCampaign(campaignID int64) (map[string]*model.Host, error) {
 	hosts := make(map[string]*model.Host)
 
-	// 1. Get all base host info
 	rows, err := DB.Query("SELECT id, mac_address, ip_address, vendor, os_guess, status, device_type FROM hosts WHERE campaign_id = ?", campaignID)
 	if err != nil {
 		return nil, fmt.Errorf("could not query hosts for campaign %d: %w", campaignID, err)
@@ -674,7 +689,6 @@ func GetFullHostsForCampaign(campaignID int64) (map[string]*model.Host, error) {
 		hostIDtoMac[h.ID] = h.MACAddress
 	}
 
-	// 2. Get all ports for the campaign
 	portRows, err := DB.Query("SELECT host_id, port_number, protocol, state, service, version FROM ports p JOIN hosts h ON p.host_id = h.id WHERE h.campaign_id = ?", campaignID)
 	if err != nil {
 		return nil, err
@@ -691,7 +705,6 @@ func GetFullHostsForCampaign(campaignID int64) (map[string]*model.Host, error) {
 		}
 	}
 
-	// 3. Get all vulnerabilities for the campaign
 	vulnRows, err := DB.Query("SELECT host_id, port_id, cve, description, state, category FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id WHERE h.campaign_id = ?", campaignID)
 	if err != nil {
 		return nil, err
@@ -704,8 +717,6 @@ func GetFullHostsForCampaign(campaignID int64) (map[string]*model.Host, error) {
 			return nil, err
 		}
 		if mac, ok := hostIDtoMac[hostID.Int64]; ok {
-			// This part is tricky without a direct port_id -> port_number mapping.
-			// For simplicity in comparison, we'll just append. A more complex app might need to link to the exact port.
 			hosts[mac].Findings[v.Category] = append(hosts[mac].Findings[v.Category], v)
 		}
 	}
