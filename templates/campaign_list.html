@@ -13,20 +13,17 @@
 </head>
 <body class="font-sans">
 
-    <!-- Scan Status Indicator -->
     <div id="scan-status-banner" class="hidden bg-blue-600 text-white text-center p-2 fixed top-0 w-full z-50">
         <span id="scan-status-text"></span>
         <button id="stop-scan-btn" class="ml-4 px-3 py-1 text-xs font-semibold bg-red-500 hover:bg-red-400 rounded">Stop Scan</button>
     </div>
 
     <div class="container mx-auto p-4 sm:p-6 lg:p-8 pt-16">
-        <!-- Header -->
         <div class="text-center mb-10">
             <h1 class="text-4xl font-bold text-white">goNetMap Campaigns</h1>
             <p class="text-lg text-gray-400 mt-2">Select a campaign or start a new scan.</p>
         </div>
 
-        <!-- Action Buttons -->
         <div class="flex justify-center gap-4 mb-10">
             <button onclick="openLiveScanModal()" class="px-6 py-3 text-base font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-500">
                 New Live Scan
@@ -34,14 +31,12 @@
             <button onclick="openFileScanModal()" class="px-6 py-3 text-base font-semibold text-white bg-green-600 rounded-lg hover:bg-green-500">
                 Load from Files
             </button>
-            <!-- NEW: Compare Campaigns Button -->
             <a href="/compare" class="px-6 py-3 text-base font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-500">
                 Compare Campaigns
             </a>
         </div>
 
 
-        <!-- Campaign List -->
         <div id="campaign-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {{if .Campaigns}}
                 {{range .Campaigns}}
@@ -50,7 +45,8 @@
                         <h2 class="text-xl font-bold text-white truncate">{{.Name}}</h2>
                         <p class="text-sm text-gray-400 mt-1">Created: {{.CreatedAt.Format "Jan 02, 2006 15:04:05"}}</p>
                     </a>
-                    <div class="mt-4 text-right">
+                    <div class="mt-4 flex justify-end items-center gap-4">
+                        <button onclick="openLiveScanModal('{{.Name}}')" class="text-sm text-blue-400 hover:text-blue-300 font-semibold">Live Capture</button>
                         <button onclick="openDeleteModal({{.ID}}, '{{.Name}}')" class="text-sm text-red-500 hover:text-red-400 font-semibold">Delete</button>
                     </div>
                 </div>
@@ -63,15 +59,14 @@
         </div>
     </div>
 
-    <!-- Live Scan Modal -->
     <div id="live-scan-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
         <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
             <div class="p-6">
-                <h3 class="text-xl font-bold text-white">Start New Live Scan</h3>
+                <h3 id="live-scan-modal-title" class="text-xl font-bold text-white">Start New Live Scan</h3>
                 <div class="mt-4 space-y-4">
                     <div>
                         <label for="live-campaign-name" class="block text-sm font-medium text-gray-300">Campaign Name</label>
-                        <input type="text" id="live-campaign-name" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                        <input type="text" id="live-campaign-name" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 read-only:bg-gray-700 read-only:cursor-not-allowed">
                     </div>
                     <div>
                         <label for="interface-select" class="block text-sm font-medium text-gray-300">Network Interface</label>
@@ -88,7 +83,6 @@
         </div>
     </div>
 
-    <!-- File Scan Modal -->
     <div id="file-scan-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
         <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
             <div class="p-6">
@@ -111,7 +105,6 @@
         </div>
     </div>
 
-    <!-- Delete Confirmation Modal -->
     <div id="delete-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
         <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
             <div class="p-6">
@@ -134,8 +127,22 @@
         const fileCampaignNameInput = document.getElementById('file-campaign-name');
         const directoryPathInput = document.getElementById('directory-path');
         const confirmFileScanBtn = document.getElementById('confirm-file-scan-btn');
+        const liveScanModalTitle = document.getElementById('live-scan-modal-title');
         
-        async function openLiveScanModal() {
+        // MODIFIED: Function now accepts an optional campaign name.
+        async function openLiveScanModal(campaignName = '') {
+            if (campaignName) {
+                // If a campaign name is provided, it's an existing campaign.
+                liveScanModalTitle.textContent = 'Add Live Capture to Campaign';
+                liveCampaignNameInput.value = campaignName;
+                liveCampaignNameInput.readOnly = true;
+            } else {
+                // Otherwise, it's a new campaign.
+                liveScanModalTitle.textContent = 'Start New Live Scan';
+                liveCampaignNameInput.value = '';
+                liveCampaignNameInput.readOnly = false;
+            }
+            
             liveScanModal.classList.remove('hidden');
             liveScanModal.classList.add('flex');
             
