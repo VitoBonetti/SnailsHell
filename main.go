@@ -32,9 +32,12 @@ func main() {
 	if err := lookups.InitMac(); err != nil {
 		log.Fatalf("FATAL: Could not initialize MAC lookup service: %v", err)
 	}
-	// NEW: Initialize the GeoIP provider
 	if err := lookups.InitGeoIP(config.Cfg); err != nil {
 		log.Fatalf("FATAL: Could not initialize GeoIP service: %v", err)
+	}
+	// NEW: Initialize Nmap runner. This is not fatal if nmap is not found.
+	if err := livecapture.InitNmap(config.Cfg); err != nil {
+		log.Printf("WARNING: %v", err)
 	}
 
 	// --- Command-line flags ---

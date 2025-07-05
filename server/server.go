@@ -61,11 +61,13 @@ func Start(embeddedTemplates embed.FS) {
 		api.GET("/interfaces", handleGetInterfaces)
 		api.DELETE("/campaigns/:campaignID", handleDeleteCampaign)
 		api.POST("/compare", handleCompareCampaigns)
+		api.GET("/nmap/status", handleGetNmapStatus) // NEW
 
 		scansAPI := api.Group("/scans")
 		{
 			scansAPI.POST("/live/start", handleStartLiveScan)
 			scansAPI.POST("/file/start", handleStartFileScan)
+			scansAPI.POST("/nmap/start", handleStartNmapScan) // NEW
 			scansAPI.GET("/status", handleGetScanStatus)
 			scansAPI.POST("/stop", handleStopScan)
 		}
@@ -205,6 +207,10 @@ func handleReportDownload(c *gin.Context) {
 
 // --- API Handlers ---
 
+func handleGetNmapStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"isNmapFound": livecapture.IsNmapFound()})
+}
+
 func handleGetInterfaces(c *gin.Context) {
 	interfaces, err := livecapture.ListInterfaces()
 	if err != nil {
@@ -225,6 +231,23 @@ func handleDeleteCampaign(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Campaign deleted successfully"})
+}
+
+func handleStartNmapScan(c *gin.Context) {
+	var req struct {
+		CampaignName string `json:"campaignName"`
+		Target       string `json:"target"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+	_, err := scanner.Manager.StartNmapScanTask(req.Target, req.CampaignName)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Nmap scan started for " + req.CampaignName})
 }
 
 func handleStartLiveScan(c *gin.Context) {

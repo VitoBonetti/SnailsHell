@@ -18,9 +18,12 @@ type Config struct {
 	GeoIP struct {
 		Provider     string `yaml:"provider"`
 		DatabasePath string `yaml:"database_path"`
-		// NEW: License key for MaxMind downloads.
-		LicenseKey string `yaml:"license_key"`
+		LicenseKey   string `yaml:"license_key"`
 	} `yaml:"geoip"`
+	// NEW: Nmap struct
+	Nmap struct {
+		Path string `yaml:"path"`
+	} `yaml:"nmap"`
 }
 
 // Cfg is a global variable that will hold the loaded configuration.
@@ -69,8 +72,13 @@ func createDefaultConfig(path string) error {
 		}{
 			Provider:     "ip-api",
 			DatabasePath: "./GeoLite2-City.mmdb",
-			// Users must fill this in themselves.
-			LicenseKey: "",
+			LicenseKey:   "",
+		},
+		// NEW: Default Nmap settings
+		Nmap: struct {
+			Path string `yaml:"path"`
+		}{
+			Path: "",
 		},
 	}
 

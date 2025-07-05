@@ -96,11 +96,19 @@ func MergeFromFile(filename string, networkMap *model.NetworkMap) error {
 	}
 	defer xmlFile.Close()
 
-	byteValue, _ := io.ReadAll(xmlFile)
+	byteValue, err := io.ReadAll(xmlFile)
+	if err != nil {
+		return fmt.Errorf("could not read nmap file %s: %w", filename, err)
+	}
 
+	return MergeFromXML(byteValue, networkMap)
+}
+
+// MergeFromXML parses Nmap XML data from a byte slice and merges it into the NetworkMap.
+func MergeFromXML(byteValue []byte, networkMap *model.NetworkMap) error {
 	var nmapRun NmapRun
 	if err := xml.Unmarshal(byteValue, &nmapRun); err != nil {
-		return fmt.Errorf("could not unmarshal nmap xml from %s: %w", filename, err)
+		return fmt.Errorf("could not unmarshal nmap xml: %w", err)
 	}
 
 	for _, nmapHost := range nmapRun.Hosts {

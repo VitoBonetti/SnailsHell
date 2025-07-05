@@ -28,6 +28,9 @@
             <button onclick="openLiveScanModal()" class="px-6 py-3 text-base font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-500">
                 New Live Scan
             </button>
+            <button id="nmap-scan-btn" onclick="openNmapScanModal()" class="px-6 py-3 text-base font-semibold text-white bg-red-600 rounded-lg hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed" title="Nmap not found. Please install it or set the path in config.yaml.">
+                Nmap Scan
+            </button>
             <button onclick="openFileScanModal()" class="px-6 py-3 text-base font-semibold text-white bg-green-600 rounded-lg hover:bg-green-500">
                 Load from Files
             </button>
@@ -46,7 +49,7 @@
                         <p class="text-sm text-gray-400 mt-1">Created: {{.CreatedAt.Format "Jan 02, 2006 15:04:05"}}</p>
                     </a>
                     <div class="mt-4 flex justify-end items-center gap-4">
-                        <button onclick="openLiveScanModal('{{.Name}}')" class="text-sm text-blue-400 hover:text-blue-300 font-semibold">Live Capture</button>
+                        <button onclick="openLiveScanModal('{{.Name}}')" class="text-sm text-blue-400 hover:text-blue-300 font-semibold">Add Live Capture</button>
                         <button onclick="openDeleteModal({{.ID}}, '{{.Name}}')" class="text-sm text-red-500 hover:text-red-400 font-semibold">Delete</button>
                     </div>
                 </div>
@@ -82,6 +85,29 @@
             </div>
         </div>
     </div>
+    
+    <div id="nmap-scan-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
+            <div class="p-6">
+                <h3 class="text-xl font-bold text-white">Start Nmap Scan</h3>
+                <div class="mt-4 space-y-4">
+                    <div>
+                        <label for="nmap-campaign-name" class="block text-sm font-medium text-gray-300">Campaign Name</label>
+                        <input type="text" id="nmap-campaign-name" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="Enter new or existing name">
+                    </div>
+                    <div>
+                        <label for="nmap-target" class="block text-sm font-medium text-gray-300">Target</label>
+                        <input type="text" id="nmap-target" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., 192.168.1.0/24, scanme.nmap.org">
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-800 px-6 py-4 flex justify-end gap-4 rounded-b-lg">
+                <button onclick="closeNmapScanModal()" class="px-4 py-2 text-sm font-medium text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-500">Cancel</button>
+                <button id="confirm-nmap-scan-btn" class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-500">Start Scan</button>
+            </div>
+        </div>
+    </div>
+
 
     <div id="file-scan-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
         <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
@@ -121,6 +147,7 @@
     <script>
         const liveScanModal = document.getElementById('live-scan-modal');
         const fileScanModal = document.getElementById('file-scan-modal');
+        const nmapScanModal = document.getElementById('nmap-scan-modal'); // NEW
         const interfaceSelect = document.getElementById('interface-select');
         const liveCampaignNameInput = document.getElementById('live-campaign-name');
         const confirmLiveScanBtn = document.getElementById('confirm-live-scan-btn');
@@ -129,15 +156,12 @@
         const confirmFileScanBtn = document.getElementById('confirm-file-scan-btn');
         const liveScanModalTitle = document.getElementById('live-scan-modal-title');
         
-        // MODIFIED: Function now accepts an optional campaign name.
         async function openLiveScanModal(campaignName = '') {
             if (campaignName) {
-                // If a campaign name is provided, it's an existing campaign.
                 liveScanModalTitle.textContent = 'Add Live Capture to Campaign';
                 liveCampaignNameInput.value = campaignName;
                 liveCampaignNameInput.readOnly = true;
             } else {
-                // Otherwise, it's a new campaign.
                 liveScanModalTitle.textContent = 'Start New Live Scan';
                 liveCampaignNameInput.value = '';
                 liveCampaignNameInput.readOnly = false;
@@ -182,6 +206,45 @@
             fileScanModal.classList.add('hidden');
             fileScanModal.classList.remove('flex');
         }
+        
+        // NEW: Functions for Nmap Scan Modal
+        function openNmapScanModal() {
+            nmapScanModal.classList.remove('hidden');
+            nmapScanModal.classList.add('flex');
+        }
+
+        function closeNmapScanModal() {
+            nmapScanModal.classList.add('hidden');
+            nmapScanModal.classList.remove('flex');
+        }
+
+        document.getElementById('confirm-nmap-scan-btn').addEventListener('click', async () => {
+            const campaignName = document.getElementById('nmap-campaign-name').value;
+            const target = document.getElementById('nmap-target').value;
+
+            if (!campaignName || !target) {
+                alert('Please provide a campaign name and a target.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/scans/nmap/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ campaignName, target }),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to start Nmap scan');
+                }
+                closeNmapScanModal();
+                checkScanStatus();
+            } catch (error) {
+                console.error('Error starting Nmap scan:', error);
+                alert(`Could not start Nmap scan: ${error.message}`);
+            }
+        });
+
 
         confirmLiveScanBtn.addEventListener('click', async () => {
             const campaignName = liveCampaignNameInput.value;
@@ -314,8 +377,26 @@
              }
         });
 
+        // Check Nmap status on page load to enable/disable the button
+        document.addEventListener('DOMContentLoaded', async () => {
+            checkScanStatus(); // Initial scan status check
+            const nmapBtn = document.getElementById('nmap-scan-btn');
+            try {
+                const response = await fetch('/api/nmap/status');
+                const data = await response.json();
+                if (data.isNmapFound) {
+                    nmapBtn.disabled = false;
+                    nmapBtn.title = "Run a scan using a local Nmap installation";
+                } else {
+                    nmapBtn.disabled = true;
+                }
+            } catch (error) {
+                console.error('Error checking nmap status:', error);
+                nmapBtn.disabled = true;
+            }
+        });
+
         setInterval(checkScanStatus, 5000);
-        document.addEventListener('DOMContentLoaded', checkScanStatus);
 
     </script>
 </body>

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // ScanManager holds the state of the currently active scan.
@@ -28,6 +29,50 @@ type ScanManager struct {
 var Manager = &ScanManager{Status: "Idle"}
 
 // --- UI-Driven (Asynchronous) Scan Functions ---
+
+// StartNmapScanTask starts an nmap scan as a background task.
+func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, error) {
+	sm.mu.Lock()
+	if sm.IsScanning {
+		sm.mu.Unlock()
+		return 0, fmt.Errorf("a scan is already in progress")
+	}
+	if !livecapture.IsNmapFound() {
+		sm.mu.Unlock()
+		return 0, fmt.Errorf("nmap executable not found")
+	}
+
+	sm.IsScanning = true
+	sm.Status = fmt.Sprintf("Nmap scan starting on target %s...", target)
+	ctx, cancel := context.WithCancel(context.Background())
+	sm.cancelFunc = cancel
+	sm.mu.Unlock()
+
+	campaignID, err := storage.GetOrCreateCampaign(campaignName)
+	if err != nil {
+		sm.resetState()
+		return 0, fmt.Errorf("could not create campaign: %w", err)
+	}
+
+	go func() {
+		defer sm.resetState()
+		log.Printf("Starting nmap scan for campaign '%s' on target '%s'", campaignName, target)
+		err := livecapture.RunNmapScan(ctx, target, campaignName)
+		if err != nil {
+			log.Printf("Error during nmap scan for campaign '%s': %v", campaignName, err)
+			sm.mu.Lock()
+			// Update status with error for user feedback
+			sm.Status = fmt.Sprintf("Nmap scan failed: %v", err)
+			sm.mu.Unlock()
+			// Keep the error message for a bit before resetting to Idle
+			<-time.After(10 * time.Second)
+			return
+		}
+		log.Printf("✅ Nmap scan finished for campaign '%s'", campaignName)
+	}()
+
+	return campaignID, nil
+}
 
 func (sm *ScanManager) StartLiveScanTask(campaignName, interfaceName string) (int64, error) {
 	sm.mu.Lock()
@@ -171,7 +216,6 @@ func RunLiveScanBlocking(campaignName, interfaceName string) {
 	fmt.Println("✅ Scan results saved successfully.")
 }
 
-// RunFileScanBlocking now returns an error to be handled by the caller.
 func RunFileScanBlocking(campaignName, dataDir string) error {
 	campaignID, err := storage.GetOrCreateCampaign(campaignName)
 	if err != nil {
@@ -180,9 +224,7 @@ func RunFileScanBlocking(campaignName, dataDir string) error {
 	return RunFileScan(campaignName, dataDir, campaignID)
 }
 
-// RunFileScan is the core logic for processing files, now returns an error.
 func RunFileScan(campaignName, dataDir string, campaignID int64) error {
-	// Trim leading/trailing whitespace and quotes to handle shell parsing issues
 	cleanDataDir := strings.TrimSpace(dataDir)
 	cleanDataDir = strings.Trim(cleanDataDir, "\"")
 	cleanDataDir = filepath.Clean(cleanDataDir)
@@ -190,7 +232,6 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) error {
 	fmt.Printf("🔎 Searching for files in '%s'...\n", cleanDataDir)
 	xmlFiles, pcapFiles, err := findDataFiles(cleanDataDir)
 	if err != nil {
-		// The error will be returned to the caller
 		return err
 	}
 	if len(xmlFiles) == 0 && len(pcapFiles) == 0 {
@@ -207,7 +248,6 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) error {
 
 	fmt.Println("\n--- Saving results to database ---")
 	if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
-		// Return the error to the caller
 		return fmt.Errorf("error saving results for '%s': %w", campaignName, err)
 	}
 	fmt.Println("✅ Scan results saved successfully.")
