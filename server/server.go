@@ -60,7 +60,7 @@ func Start(embeddedTemplates embed.FS) {
 	{
 		api.GET("/interfaces", handleGetInterfaces)
 		api.DELETE("/campaigns/:campaignID", handleDeleteCampaign)
-		api.POST("/compare", handleCompareCampaigns) // New comparison endpoint
+		api.POST("/compare", handleCompareCampaigns)
 
 		scansAPI := api.Group("/scans")
 		{

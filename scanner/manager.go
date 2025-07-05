@@ -100,7 +100,9 @@ func (sm *ScanManager) StartFileScanTask(campaignName, dataDir string) (int64, e
 	go func() {
 		defer sm.resetState()
 		log.Printf("Starting file scan for campaign '%s'", campaignName)
-		RunFileScan(campaignName, dataDir, campaignID)
+		if err := RunFileScan(campaignName, dataDir, campaignID); err != nil {
+			log.Printf("Error during file scan task: %v", err)
+		}
 	}()
 
 	return campaignID, nil
@@ -169,32 +171,34 @@ func RunLiveScanBlocking(campaignName, interfaceName string) {
 	fmt.Println("✅ Scan results saved successfully.")
 }
 
-func RunFileScanBlocking(campaignName, dataDir string) {
+// RunFileScanBlocking now returns an error to be handled by the caller.
+func RunFileScanBlocking(campaignName, dataDir string) error {
 	campaignID, err := storage.GetOrCreateCampaign(campaignName)
 	if err != nil {
-		log.Fatalf("Error handling campaign '%s': %v", campaignName, err)
+		return fmt.Errorf("error handling campaign '%s': %w", campaignName, err)
 	}
-	RunFileScan(campaignName, dataDir, campaignID)
+	return RunFileScan(campaignName, dataDir, campaignID)
 }
 
-// RunFileScan is the core logic for processing files, used by both CLI and UI tasks.
-func RunFileScan(campaignName, dataDir string, campaignID int64) {
-	dataDir = strings.Trim(dataDir, "\"")
-	cleanDataDir := filepath.Clean(dataDir)
+// RunFileScan is the core logic for processing files, now returns an error.
+func RunFileScan(campaignName, dataDir string, campaignID int64) error {
+	// Trim leading/trailing whitespace and quotes to handle shell parsing issues
+	cleanDataDir := strings.TrimSpace(dataDir)
+	cleanDataDir = strings.Trim(cleanDataDir, "\"")
+	cleanDataDir = filepath.Clean(cleanDataDir)
 
 	fmt.Printf("🔎 Searching for files in '%s'...\n", cleanDataDir)
 	xmlFiles, pcapFiles, err := findDataFiles(cleanDataDir)
 	if err != nil {
-		log.Printf("Error finding data files for campaign '%s': %v", campaignName, err)
-		return
+		// The error will be returned to the caller
+		return err
 	}
 	if len(xmlFiles) == 0 && len(pcapFiles) == 0 {
 		fmt.Printf("No new data files found in '%s'.\n", cleanDataDir)
-		return
+		return nil
 	}
 
 	fmt.Printf("Found %d Nmap and %d Pcap files. Processing...\n", len(xmlFiles), len(pcapFiles))
-	// FIX: This now correctly calls the function in the processing package.
 	masterMap, globalSummary := processing.ProcessFiles(xmlFiles, pcapFiles)
 
 	fmt.Println("\n--- Finalizing data ---")
@@ -203,9 +207,11 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) {
 
 	fmt.Println("\n--- Saving results to database ---")
 	if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
-		log.Printf("Error saving results for '%s': %v", campaignName, err)
+		// Return the error to the caller
+		return fmt.Errorf("error saving results for '%s': %w", campaignName, err)
 	}
 	fmt.Println("✅ Scan results saved successfully.")
+	return nil
 }
 
 func findDataFiles(rootDir string) ([]string, []string, error) {

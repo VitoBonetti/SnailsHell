@@ -42,8 +42,16 @@ func main() {
 	liveCapture := flag.Bool("live", false, "Enable live packet capture mode (requires -campaign and -iface).")
 	iface := flag.String("iface", "", "Interface for live capture (use -live without this flag to see options).")
 	compareFlag := flag.String("compare", "", "Compare two campaigns by name or ID, separated by a comma. e.g., 'CampaignA,CampaignB' or '1,2'")
+	noUI := flag.Bool("no-ui", false, "Run in CLI-only mode without starting the web server.")
 
 	flag.Parse()
+
+	// FIX: Workaround for shells (like PowerShell) that merge the last flag
+	// into the value of the preceding string flag if it ends with a backslash.
+	if strings.HasSuffix(*dataDir, " -no-ui") {
+		*dataDir = strings.TrimSuffix(*dataDir, " -no-ui")
+		*noUI = true
+	}
 
 	// --- Command-Line Dispatcher ---
 	if *listCampaigns {
@@ -51,13 +59,12 @@ func main() {
 		return
 	}
 
-	// NEW: Handle comparison from CLI
 	if *compareFlag != "" {
 		parts := strings.Split(*compareFlag, ",")
 		if len(parts) != 2 {
 			log.Fatal("FATAL: The -compare flag requires two campaign names or IDs, separated by a comma.")
 		}
-		handleCompareCLI(parts[0], parts[1])
+		handleCompareCLI(parts[0], parts[1], *noUI)
 		return
 	}
 
@@ -71,14 +78,16 @@ func main() {
 		}
 		scanner.RunLiveScanBlocking(*campaignName, *iface)
 		campaignID, _ := storage.GetOrCreateCampaign(*campaignName)
-		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
+		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS, *noUI)
 		return
 	}
 
 	if *campaignName != "" {
-		scanner.RunFileScanBlocking(*campaignName, *dataDir)
+		if err := scanner.RunFileScanBlocking(*campaignName, *dataDir); err != nil {
+			log.Fatalf("FATAL: File scan failed: %v", err)
+		}
 		campaignID, _ := storage.GetOrCreateCampaign(*campaignName)
-		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
+		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS, *noUI)
 		return
 	}
 
@@ -87,7 +96,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("FATAL: Could not find or create campaign '%s': %v", *openCampaignName, err)
 		}
-		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
+		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS, *noUI)
 		return
 	}
 
@@ -96,13 +105,13 @@ func main() {
 		if err != nil {
 			log.Fatalf("FATAL: No campaign found with ID %d: %v", *openCampaignID, err)
 		}
-		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", *openCampaignID), templatesFS)
+		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", *openCampaignID), templatesFS, *noUI)
 		return
 	}
 
 	// Default action: Start the server if no other flags are provided.
 	fmt.Println("✅ Starting server...")
-	launchServerAndBrowser("http://localhost:8080/", templatesFS)
+	launchServerAndBrowser("http://localhost:8080/", templatesFS, *noUI)
 }
 
 func handleListCampaignsCLI() {
@@ -148,7 +157,7 @@ func handleListInterfacesCLI() {
 	fmt.Printf("go run . -campaign \"Live Test\" -live -iface \"%s\"\n", devices[0].Name)
 }
 
-func handleCompareCLI(baseIdentifier, compareIdentifier string) {
+func handleCompareCLI(baseIdentifier, compareIdentifier string, noUI bool) {
 	getCampaignID := func(identifier string) int64 {
 		id, err := strconv.ParseInt(identifier, 10, 64)
 		if err == nil {
@@ -211,17 +220,24 @@ func handleCompareCLI(baseIdentifier, compareIdentifier string) {
 		fmt.Println("  None")
 	}
 
-	fmt.Println("\nLaunching browser to view detailed comparison...")
-	launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/compare?base=%d&compare=%d", baseID, compareID), templatesFS)
+	launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/compare?base=%d&compare=%d", baseID, compareID), templatesFS, noUI)
 }
 
-func launchServerAndBrowser(url string, fs embed.FS) {
+func launchServerAndBrowser(url string, fs embed.FS, noUI bool) {
+	if noUI {
+		fmt.Println("\n--no-ui flag detected. Skipping server launch. Task complete.")
+		return
+	}
+
 	go server.Start(fs)
+
 	if url != "" {
+		fmt.Println("\nLaunching browser to view results...")
 		go func() {
 			<-time.After(1 * time.Second)
 			browser.OpenURL(url)
 		}()
 	}
-	select {}
+
+	select {} // Keep the application running
 }

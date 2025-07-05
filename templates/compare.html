@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Compare Campaigns - goNetMap</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { background-color: #111827; color: #d1d5db; }
         .card { background-color: #1f2937; border: 1px solid #374151; }
@@ -16,6 +17,22 @@
             padding-right: 2.5rem;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
+        }
+        /* Style for the collapsible details summary */
+        details > summary {
+            list-style: none; /* Hide the default marker */
+        }
+        details > summary::-webkit-details-marker {
+            display: none; /* Hide the default marker in Chrome */
+        }
+        details > summary::after {
+            content: '►'; /* Collapsed state arrow */
+            float: right;
+            transform: rotate(0deg);
+            transition: transform 0.2s;
+        }
+        details[open] > summary::after {
+            transform: rotate(90deg); /* Expanded state arrow */
         }
     </style>
 </head>
@@ -55,7 +72,7 @@
             </div>
         </div>
 
-        <div id="results-container" class="mt-10">
+        <div id="results-container" class="mt-10 max-w-6xl mx-auto">
             </div>
 
     </div>
@@ -65,6 +82,7 @@
         const compSelect = document.getElementById('comp-campaign');
         const compareBtn = document.getElementById('compare-btn');
         const resultsContainer = document.getElementById('results-container');
+        let comparisonChart = null; // To hold the chart instance
 
         async function handleCompare() {
             const baseId = baseSelect.value;
@@ -102,66 +120,112 @@
         }
 
         function renderResults(results) {
+            // Destroy previous chart if it exists
+            if (comparisonChart) {
+                comparisonChart.destroy();
+            }
+            
+            // Outer structure with header and containers for chart and details
             let html = `
-                <h2 class="text-2xl font-bold text-white text-center mb-6">
+                <h2 class="text-3xl font-bold text-white text-center mb-8">
                     Comparison: ${results.baseCampaign.Name} vs ${results.compareCampaign.Name}
                 </h2>
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="card rounded-lg p-6 mb-6">
+                    <h3 class="text-xl font-semibold text-white mb-4 text-center">Changes Summary</h3>
+                    <canvas id="summaryChart"></canvas>
+                </div>
+                <div class="space-y-4">
             `;
 
-            // New Hosts
-            html += `
-                <div>
-                    <h3 class="text-xl font-semibold text-green-400 mb-3">New Hosts (${results.newHosts.length})</h3>
-                    <div class="space-y-3">
-                        ${results.newHosts.map(host => `
-                            <div class="card p-3 rounded-lg">
-                                <p class="font-mono text-white">${host.mac_address}</p>
-                                <p class="text-sm text-gray-400">${host.fingerprint.Vendor || 'Unknown Vendor'}</p>
+            // Function to create a collapsible section
+            const createCollapsibleSection = (title, colorClass, count, items, itemRenderer) => {
+                return `
+                    <details class="card rounded-lg overflow-hidden" ${count === 0 ? '' : 'open'}>
+                        <summary class="p-4 cursor-pointer hover:bg-gray-800 flex justify-between items-center font-semibold text-lg ${colorClass}">
+                            ${title} (${count})
+                        </summary>
+                        <div class="p-4 border-t border-gray-600 bg-gray-900/20">
+                            <div class="space-y-3 max-h-96 overflow-y-auto pr-2">
+                                ${count > 0 ? items.map(itemRenderer).join('') : '<p class="text-sm text-gray-500">None</p>'}
                             </div>
-                        `).join('') || '<p class="text-sm text-gray-500">None</p>'}
-                    </div>
+                        </div>
+                    </details>
+                `;
+            };
+
+            // Renderer for New and Missing Hosts
+            const hostRenderer = host => `
+                <div class="card p-3 rounded-lg">
+                    <p class="font-mono text-white">${host.mac_address}</p>
+                    <p class="text-sm text-gray-400">${host.fingerprint.Vendor || 'Unknown Vendor'}</p>
                 </div>
             `;
 
-            // Missing Hosts
-            html += `
-                <div>
-                    <h3 class="text-xl font-semibold text-red-400 mb-3">Missing Hosts (${results.missingHosts.length})</h3>
-                    <div class="space-y-3">
-                        ${results.missingHosts.map(host => `
-                            <div class="card p-3 rounded-lg">
-                                <p class="font-mono text-white">${host.mac_address}</p>
-                                <p class="text-sm text-gray-400">${host.fingerprint.Vendor || 'Unknown Vendor'}</p>
-                            </div>
-                        `).join('') || '<p class="text-sm text-gray-500">None</p>'}
-                    </div>
+            // Renderer for Changed Hosts
+            const changeRenderer = change => `
+                <div class="card p-3 rounded-lg">
+                    <p class="font-mono text-white">${change.host.mac_address}</p>
+                    <ul class="text-xs list-disc list-inside mt-2 space-y-1 text-gray-300">
+                        ${change.changes.map(c => `<li>${c}</li>`).join('')}
+                    </ul>
                 </div>
             `;
-            
-            // Changed Hosts
-            html += `
-                <div>
-                    <h3 class="text-xl font-semibold text-yellow-400 mb-3">Changed Hosts (${results.changedHosts.length})</h3>
-                    <div class="space-y-3">
-                        ${results.changedHosts.map(change => `
-                            <div class="card p-3 rounded-lg">
-                                <p class="font-mono text-white">${change.host.mac_address}</p>
-                                <ul class="text-xs list-disc list-inside mt-2 space-y-1">
-                                    ${change.changes.map(c => `<li>${c}</li>`).join('')}
-                                </ul>
-                            </div>
-                        `).join('') || '<p class="text-sm text-gray-500">None</p>'}
-                    </div>
-                </div>
-            `;
+
+            // Append sections
+            html += createCollapsibleSection('New Hosts', 'text-green-400', results.newHosts.length, results.newHosts, hostRenderer);
+            html += createCollapsibleSection('Missing Hosts', 'text-red-400', results.missingHosts.length, results.missingHosts, hostRenderer);
+            html += createCollapsibleSection('Changed Hosts', 'text-yellow-400', results.changedHosts.length, results.changedHosts, changeRenderer);
 
             html += '</div>';
             resultsContainer.innerHTML = html;
+
+            // --- Render the Chart ---
+            const ctx = document.getElementById('summaryChart').getContext('2d');
+            comparisonChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['New Hosts', 'Missing Hosts', 'Changed Hosts'],
+                    datasets: [{
+                        label: 'Host Changes',
+                        data: [results.newHosts.length, results.missingHosts.length, results.changedHosts.length],
+                        backgroundColor: [
+                            'rgba(52, 211, 153, 0.5)',  // green-400
+                            'rgba(248, 113, 113, 0.5)', // red-400
+                            'rgba(250, 204, 21, 0.5)'   // yellow-400
+                        ],
+                        borderColor: [
+                            'rgba(52, 211, 153, 1)',
+                            'rgba(248, 113, 113, 1)',
+                            'rgba(250, 204, 21, 1)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { 
+                                color: '#d1d5db', // Text color for y-axis
+                                stepSize: 1 
+                            },
+                            grid: { color: '#374151' } // Grid line color
+                        },
+                        x: {
+                            ticks: { color: '#d1d5db' }, // Text color for x-axis
+                            grid: { color: '#374151' }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false // We don't need a legend for one dataset
+                        }
+                    }
+                }
+            });
         }
         
         document.addEventListener('DOMContentLoaded', () => {
-            // If the dropdowns are pre-selected from the URL, run the comparison automatically
             if (baseSelect.value && compSelect.value) {
                 compareBtn.disabled = false;
                 handleCompare();
@@ -169,11 +233,7 @@
         });
         
         function checkSelections() {
-            if (baseSelect.value && compSelect.value) {
-                compareBtn.disabled = false;
-            } else {
-                compareBtn.disabled = true;
-            }
+            compareBtn.disabled = !(baseSelect.value && compSelect.value);
         }
 
         baseSelect.addEventListener('change', checkSelections);
