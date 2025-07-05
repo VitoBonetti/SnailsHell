@@ -1,18 +1,22 @@
 package lookups
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"gonetmap/config"
 	"gonetmap/model"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang"
 )
 
-// provider is the global instance of the configured GeoIP provider.
 var provider GeoIPProvider
 
 // GeoIPProvider defines the interface for any geolocation service.
@@ -25,9 +29,17 @@ type GeoIPProvider interface {
 func InitGeoIP(cfg *config.Config) error {
 	switch cfg.GeoIP.Provider {
 	case "maxmind":
+		// Check if the database file exists.
+		if _, err := os.Stat(cfg.GeoIP.DatabasePath); os.IsNotExist(err) {
+			fmt.Printf("MaxMind DB not found at %s. Attempting to download...\n", cfg.GeoIP.DatabasePath)
+			err := downloadAndExtractMaxMindDB(cfg.GeoIP.LicenseKey, cfg.GeoIP.DatabasePath)
+			if err != nil {
+				return fmt.Errorf("failed to download MaxMind database: %w", err)
+			}
+		}
 		db, err := maxminddb.Open(cfg.GeoIP.DatabasePath)
 		if err != nil {
-			return fmt.Errorf("could not open maxmind db at %s: %w. Make sure you have downloaded it from the MaxMind website", cfg.GeoIP.DatabasePath, err)
+			return fmt.Errorf("could not open maxmind db at %s: %w", cfg.GeoIP.DatabasePath, err)
 		}
 		provider = &MaxMindProvider{db: db}
 	case "ip-api":
@@ -37,6 +49,67 @@ func InitGeoIP(cfg *config.Config) error {
 	}
 	fmt.Printf("✅ GeoIP provider initialized: %s\n", provider.Name())
 	return nil
+}
+
+// downloadAndExtractMaxMindDB handles fetching and preparing the GeoLite2 database.
+func downloadAndExtractMaxMindDB(licenseKey, targetPath string) error {
+	if licenseKey == "" {
+		return fmt.Errorf("license_key is not set in config.yaml. Please get a key from maxmind.com to enable automatic downloads")
+	}
+
+	// Construct the download URL
+	url := fmt.Sprintf("https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=%s&suffix=tar.gz", licenseKey)
+
+	fmt.Println("Downloading GeoLite2-City database...")
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to start download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status: %s", resp.Status)
+	}
+
+	// The downloaded file is a gzipped tarball, so we need to decompress and extract it.
+	gzipReader, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzipReader.Close()
+
+	tarReader := tar.NewReader(gzipReader)
+
+	fmt.Println("Extracting database file...")
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break // End of archive
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar header: %w", err)
+		}
+
+		// We are looking for the .mmdb file inside the archive.
+		if strings.HasSuffix(header.Name, ".mmdb") {
+			// Create the destination file.
+			outFile, err := os.Create(targetPath)
+			if err != nil {
+				return fmt.Errorf("failed to create target file %s: %w", targetPath, err)
+			}
+			defer outFile.Close()
+
+			// Copy the file contents from the archive to the destination file.
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				return fmt.Errorf("failed to copy file contents: %w", err)
+			}
+
+			fmt.Printf("✅ Successfully downloaded and extracted database to %s\n", targetPath)
+			return nil // Success
+		}
+	}
+
+	return fmt.Errorf("could not find a .mmdb file in the downloaded archive")
 }
 
 // LookupIP performs a geolocation lookup using the configured provider.
@@ -79,7 +152,6 @@ func (p *IPAPIProvider) Lookup(ip string) (*model.GeoInfo, error) {
 	}
 
 	if geoData.Status == "fail" {
-		// Private range IPs will fail, which is normal.
 		if geoData.Message == "private range" {
 			return nil, nil
 		}
@@ -99,7 +171,6 @@ type MaxMindProvider struct {
 	db *maxminddb.Reader
 }
 
-// MaxMindRecord is the structure that matches the GeoLite2-City database.
 type MaxMindRecord struct {
 	City struct {
 		Names map[string]string `maxminddb:"names"`
@@ -130,9 +201,8 @@ func (p *MaxMindProvider) Lookup(ip string) (*model.GeoInfo, error) {
 		return nil, err
 	}
 
-	// If the IP is not found in the database, the record will be empty.
 	if record.Country.IsoCode == "" && record.City.Names["en"] == "" {
-		return nil, nil // Not found is not an error
+		return nil, nil
 	}
 
 	return &model.GeoInfo{

@@ -15,10 +15,11 @@ type Config struct {
 	DefaultPaths struct {
 		DataDir string `yaml:"data_dir"`
 	} `yaml:"default_paths"`
-	// NEW: GeoIP struct
 	GeoIP struct {
 		Provider     string `yaml:"provider"`
 		DatabasePath string `yaml:"database_path"`
+		// NEW: License key for MaxMind downloads.
+		LicenseKey string `yaml:"license_key"`
 	} `yaml:"geoip"`
 }
 
@@ -30,19 +31,16 @@ func LoadConfig() error {
 	Cfg = &Config{}
 	configPath := "config.yaml"
 
-	// Check if the config file exists.
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		fmt.Println("No config.yaml found. Creating a default one.")
 		return createDefaultConfig(configPath)
 	}
 
-	// If it exists, read it.
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("could not read config file %s: %w", configPath, err)
 	}
 
-	// Unmarshal the YAML data into our Config struct.
 	if err := yaml.Unmarshal(data, Cfg); err != nil {
 		return fmt.Errorf("could not parse config file %s: %w", configPath, err)
 	}
@@ -64,28 +62,27 @@ func createDefaultConfig(path string) error {
 		}{
 			DataDir: "./data",
 		},
-		// NEW: Default GeoIP settings
 		GeoIP: struct {
 			Provider     string `yaml:"provider"`
 			DatabasePath string `yaml:"database_path"`
+			LicenseKey   string `yaml:"license_key"`
 		}{
 			Provider:     "ip-api",
 			DatabasePath: "./GeoLite2-City.mmdb",
+			// Users must fill this in themselves.
+			LicenseKey: "",
 		},
 	}
 
-	// Marshal the default config struct into YAML format.
 	data, err := yaml.Marshal(&defaultConfig)
 	if err != nil {
 		return fmt.Errorf("could not marshal default config: %w", err)
 	}
 
-	// Write the YAML data to the file.
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("could not write default config file: %w", err)
 	}
 
-	// Set the global Cfg variable to the default config so the app can use it immediately.
 	Cfg = &defaultConfig
 
 	return nil
