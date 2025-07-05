@@ -1,4 +1,4 @@
-package functions
+package server
 
 import (
 	"archive/zip"
@@ -11,11 +11,9 @@ import (
 
 // GenerateReportZip creates a ZIP archive in memory containing multiple CSV files.
 func GenerateReportZip(campaignID int64) ([]byte, error) {
-	// Create a buffer to write our archive to.
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
 
-	// --- 1. Generate hosts.csv ---
 	hosts, err := storage.GetAllHostsForReport(campaignID)
 	if err != nil {
 		return nil, fmt.Errorf("could not get hosts for report: %w", err)
@@ -34,7 +32,6 @@ func GenerateReportZip(campaignID int64) ([]byte, error) {
 		return nil, err
 	}
 
-	// --- 2. Generate ports.csv ---
 	ports, err := storage.GetAllPortsForReport(campaignID)
 	if err != nil {
 		return nil, fmt.Errorf("could not get ports for report: %w", err)
@@ -46,7 +43,6 @@ func GenerateReportZip(campaignID int64) ([]byte, error) {
 		return nil, err
 	}
 
-	// --- 3. Generate vulnerabilities.csv ---
 	vulns, err := storage.GetAllVulnsForReport(campaignID)
 	if err != nil {
 		return nil, fmt.Errorf("could not get vulnerabilities for report: %w", err)
@@ -58,7 +54,6 @@ func GenerateReportZip(campaignID int64) ([]byte, error) {
 		return nil, err
 	}
 
-	// --- 4. Generate communications.csv ---
 	comms, err := storage.GetAllCommsForReport(campaignID)
 	if err != nil {
 		return nil, fmt.Errorf("could not get communications for report: %w", err)
@@ -70,7 +65,6 @@ func GenerateReportZip(campaignID int64) ([]byte, error) {
 		return nil, err
 	}
 
-	// --- 5. Generate dns_lookups.csv ---
 	dns, err := storage.GetAllDNSForReport(campaignID)
 	if err != nil {
 		return nil, fmt.Errorf("could not get dns lookups for report: %w", err)
@@ -82,7 +76,6 @@ func GenerateReportZip(campaignID int64) ([]byte, error) {
 		return nil, err
 	}
 
-	// --- 6. Generate handshakes.csv ---
 	handshakes, err := storage.GetAllHandshakesForReport(campaignID)
 	if err != nil {
 		return nil, fmt.Errorf("could not get handshakes for report: %w", err)
@@ -100,7 +93,6 @@ func GenerateReportZip(campaignID int64) ([]byte, error) {
 		return nil, err
 	}
 
-	// Close the zip writer to finalize the archive.
 	if err := zipWriter.Close(); err != nil {
 		return nil, fmt.Errorf("could not close zip writer: %w", err)
 	}
@@ -108,28 +100,18 @@ func GenerateReportZip(campaignID int64) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// createCSVInZip is a helper function to write a CSV file into a zip archive.
 func createCSVInZip(zipWriter *zip.Writer, filename string, header []string, data [][]string) error {
-	// Create a new file in the zip archive.
 	fileWriter, err := zipWriter.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to create %s in zip: %w", filename, err)
 	}
-
-	// Create a CSV writer.
 	csvWriter := csv.NewWriter(fileWriter)
-
-	// Write the header.
 	if err := csvWriter.Write(header); err != nil {
 		return fmt.Errorf("failed to write header to %s: %w", filename, err)
 	}
-
-	// Write all the data rows.
 	if err := csvWriter.WriteAll(data); err != nil {
 		return fmt.Errorf("failed to write data to %s: %w", filename, err)
 	}
-
-	// Flush the writer to ensure everything is written.
 	csvWriter.Flush()
 	return csvWriter.Error()
 }

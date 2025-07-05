@@ -13,12 +13,29 @@
 </head>
 <body class="font-sans">
 
-    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+    <!-- Scan Status Indicator -->
+    <div id="scan-status-banner" class="hidden bg-blue-600 text-white text-center p-2 fixed top-0 w-full z-50">
+        <span id="scan-status-text"></span>
+        <button id="stop-scan-btn" class="ml-4 px-3 py-1 text-xs font-semibold bg-red-500 hover:bg-red-400 rounded">Stop Scan</button>
+    </div>
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8 pt-16">
         <!-- Header -->
         <div class="text-center mb-10">
             <h1 class="text-4xl font-bold text-white">goNetMap Campaigns</h1>
-            <p class="text-lg text-gray-400 mt-2">Select a campaign to view its dashboard.</p>
+            <p class="text-lg text-gray-400 mt-2">Select a campaign or start a new scan.</p>
         </div>
+
+        <!-- Action Buttons -->
+        <div class="flex justify-center gap-4 mb-10">
+            <button onclick="openLiveScanModal()" class="px-6 py-3 text-base font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-500">
+                New Live Scan
+            </button>
+            <button onclick="openFileScanModal()" class="px-6 py-3 text-base font-semibold text-white bg-green-600 rounded-lg hover:bg-green-500">
+                Load from Files
+            </button>
+        </div>
+
 
         <!-- Campaign List -->
         <div id="campaign-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -36,10 +53,57 @@
                 {{end}}
             {{else}}
                 <div class="card col-span-full rounded-lg p-8 text-center">
-                    <p class="text-gray-400">No campaigns found. Run a scan to create one, e.g.:</p>
-                    <p class="font-mono bg-gray-800 p-2 rounded-md mt-4 inline-block">go run . -campaign "My First Scan"</p>
+                    <p class="text-gray-400">No campaigns found. Start a new scan to begin.</p>
                 </div>
             {{end}}
+        </div>
+    </div>
+
+    <!-- Live Scan Modal -->
+    <div id="live-scan-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
+            <div class="p-6">
+                <h3 class="text-xl font-bold text-white">Start New Live Scan</h3>
+                <div class="mt-4 space-y-4">
+                    <div>
+                        <label for="live-campaign-name" class="block text-sm font-medium text-gray-300">Campaign Name</label>
+                        <input type="text" id="live-campaign-name" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="interface-select" class="block text-sm font-medium text-gray-300">Network Interface</label>
+                        <select id="interface-select" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                            <option>Loading interfaces...</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-800 px-6 py-4 flex justify-end gap-4 rounded-b-lg">
+                <button onclick="closeLiveScanModal()" class="px-4 py-2 text-sm font-medium text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-500">Cancel</button>
+                <button id="confirm-live-scan-btn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500">Start Scan</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Scan Modal -->
+    <div id="file-scan-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
+            <div class="p-6">
+                <h3 class="text-xl font-bold text-white">Load Data from Files</h3>
+                <div class="mt-4 space-y-4">
+                    <div>
+                        <label for="file-campaign-name" class="block text-sm font-medium text-gray-300">Campaign Name</label>
+                        <input type="text" id="file-campaign-name" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="Enter new or existing name">
+                    </div>
+                    <div>
+                        <label for="directory-path" class="block text-sm font-medium text-gray-300">Directory Path</label>
+                        <input type="text" id="directory-path" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., C:\Users\YourUser\Documents\scans">
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-800 px-6 py-4 flex justify-end gap-4 rounded-b-lg">
+                <button onclick="closeFileScanModal()" class="px-4 py-2 text-sm font-medium text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-500">Cancel</button>
+                <button id="confirm-file-scan-btn" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-500">Start Import</button>
+            </div>
         </div>
     </div>
 
@@ -58,9 +122,112 @@
     </div>
 
     <script>
+        const liveScanModal = document.getElementById('live-scan-modal');
+        const fileScanModal = document.getElementById('file-scan-modal');
+        const interfaceSelect = document.getElementById('interface-select');
+        const liveCampaignNameInput = document.getElementById('live-campaign-name');
+        const confirmLiveScanBtn = document.getElementById('confirm-live-scan-btn');
+        const fileCampaignNameInput = document.getElementById('file-campaign-name');
+        const directoryPathInput = document.getElementById('directory-path');
+        const confirmFileScanBtn = document.getElementById('confirm-file-scan-btn');
+        
+        async function openLiveScanModal() {
+            liveScanModal.classList.remove('hidden');
+            liveScanModal.classList.add('flex');
+            
+            try {
+                const response = await fetch('/api/interfaces');
+                if (!response.ok) throw new Error('Failed to fetch interfaces');
+                const interfaces = await response.json();
+                
+                interfaceSelect.innerHTML = ''; 
+                if (interfaces && interfaces.length > 0) {
+                    interfaces.forEach(iface => {
+                        const option = document.createElement('option');
+                        option.value = iface.Name;
+                        option.textContent = `${iface.Description || 'No description'} (${iface.Name})`;
+                        interfaceSelect.appendChild(option);
+                    });
+                } else {
+                    interfaceSelect.innerHTML = '<option>No interfaces found</option>';
+                }
+            } catch (error) {
+                console.error('Error fetching interfaces:', error);
+                interfaceSelect.innerHTML = '<option>Error loading interfaces</option>';
+            }
+        }
+
+        function closeLiveScanModal() {
+            liveScanModal.classList.add('hidden');
+            liveScanModal.classList.remove('flex');
+        }
+
+        function openFileScanModal() {
+            fileScanModal.classList.remove('hidden');
+            fileScanModal.classList.add('flex');
+        }
+
+        function closeFileScanModal() {
+            fileScanModal.classList.add('hidden');
+            fileScanModal.classList.remove('flex');
+        }
+
+        confirmLiveScanBtn.addEventListener('click', async () => {
+            const campaignName = liveCampaignNameInput.value;
+            const interfaceName = interfaceSelect.value;
+
+            if (!campaignName || !interfaceName) {
+                alert('Please provide a campaign name and select an interface.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/scans/live/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ campaignName, interfaceName }),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to start scan');
+                }
+                closeLiveScanModal();
+                checkScanStatus();
+            } catch (error) {
+                console.error('Error starting scan:', error);
+                alert(`Could not start scan: ${error.message}`);
+            }
+        });
+
+        confirmFileScanBtn.addEventListener('click', async () => {
+            const campaignName = fileCampaignNameInput.value;
+            const directory = directoryPathInput.value;
+
+            if (!campaignName || !directory) {
+                alert('Please provide a campaign name and a directory path.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/scans/file/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ campaignName, directory }),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to start scan');
+                }
+                closeFileScanModal();
+                checkScanStatus();
+            } catch (error) {
+                console.error('Error starting file scan:', error);
+                alert(`Could not start file scan: ${error.message}`);
+            }
+        });
+
         const deleteModal = document.getElementById('delete-modal');
         const modalCampaignName = document.getElementById('modal-campaign-name');
-        const confirmDeleteBtn = document.getElementById('confirm-delete-btn');
         let campaignToDeleteId = null;
 
         function openDeleteModal(id, name) {
@@ -88,7 +255,6 @@
                     throw new Error('Failed to delete campaign');
                 }
 
-                // Remove the card from the UI
                 const card = document.getElementById(`campaign-card-${campaignToDeleteId}`);
                 if (card) {
                     card.style.transition = 'opacity 0.5s ease';
@@ -103,6 +269,44 @@
                 closeDeleteModal();
             }
         }
+
+        const statusBanner = document.getElementById('scan-status-banner');
+        const statusText = document.getElementById('scan-status-text');
+        const stopScanBtn = document.getElementById('stop-scan-btn');
+
+        async function checkScanStatus() {
+            try {
+                const response = await fetch('/api/scans/status');
+                const data = await response.json();
+                if (data.isScanning) {
+                    statusText.textContent = `Scan in progress: ${data.status}`;
+                    statusBanner.classList.remove('hidden');
+                } else {
+                    if (!statusBanner.classList.contains('hidden')) {
+                        // If the banner was visible and now isn't, the scan just finished.
+                        statusBanner.classList.add('hidden');
+                        window.location.reload();
+                    }
+                }
+            } catch (error) {
+                console.error('Error checking scan status:', error);
+                statusBanner.classList.add('hidden');
+            }
+        }
+        
+        stopScanBtn.addEventListener('click', async () => {
+             try {
+                await fetch('/api/scans/stop', { method: 'POST' });
+                alert('Scan stop request sent. The scan will stop shortly.');
+             } catch(error) {
+                console.error('Error stopping scan:', error);
+                alert('Could not send stop request.');
+             }
+        });
+
+        setInterval(checkScanStatus, 5000);
+        document.addEventListener('DOMContentLoaded', checkScanStatus);
+
     </script>
 </body>
 </html>
