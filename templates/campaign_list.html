@@ -34,6 +34,10 @@
             <button onclick="openFileScanModal()" class="px-6 py-3 text-base font-semibold text-white bg-green-600 rounded-lg hover:bg-green-500">
                 Load from Files
             </button>
+            <!-- NEW: Compare Campaigns Button -->
+            <a href="/compare" class="px-6 py-3 text-base font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-500">
+                Compare Campaigns
+            </a>
         </div>
 
 
@@ -283,7 +287,6 @@
                     statusBanner.classList.remove('hidden');
                 } else {
                     if (!statusBanner.classList.contains('hidden')) {
-                        // If the banner was visible and now isn't, the scan just finished.
                         statusBanner.classList.add('hidden');
                         window.location.reload();
                     }

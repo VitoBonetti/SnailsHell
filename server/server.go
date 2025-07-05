@@ -45,6 +45,8 @@ func Start(embeddedTemplates embed.FS) {
 
 	// Page routes
 	router.GET("/", handleCampaignList)
+	router.GET("/compare", handleComparePage)
+
 	campaignRoutes := router.Group("/campaign/:campaignID")
 	{
 		campaignRoutes.GET("/", handleDashboard)
@@ -58,13 +60,14 @@ func Start(embeddedTemplates embed.FS) {
 	{
 		api.GET("/interfaces", handleGetInterfaces)
 		api.DELETE("/campaigns/:campaignID", handleDeleteCampaign)
+		api.POST("/compare", handleCompareCampaigns) // New comparison endpoint
 
 		scansAPI := api.Group("/scans")
 		{
 			scansAPI.POST("/live/start", handleStartLiveScan)
-			scansAPI.POST("/file/start", handleStartFileScan) // New endpoint
+			scansAPI.POST("/file/start", handleStartFileScan)
 			scansAPI.GET("/status", handleGetScanStatus)
-			scansAPI.POST("/stop", handleStopScan) // Simplified stop endpoint
+			scansAPI.POST("/stop", handleStopScan)
 		}
 
 		apiCampaignRoutes := api.Group("/campaign/:campaignID")
@@ -90,6 +93,17 @@ func handleCampaignList(c *gin.Context) {
 		return
 	}
 	c.HTML(http.StatusOK, "campaign_list.html", gin.H{
+		"Campaigns": campaigns,
+	})
+}
+
+func handleComparePage(c *gin.Context) {
+	campaigns, err := storage.ListCampaigns()
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Could not load campaigns.")
+		return
+	}
+	c.HTML(http.StatusOK, "compare.html", gin.H{
 		"Campaigns": campaigns,
 	})
 }
@@ -341,4 +355,21 @@ func handleGetHostCommunications(c *gin.Context) {
 		"nodes": nodes,
 		"edges": edges,
 	})
+}
+
+func handleCompareCampaigns(c *gin.Context) {
+	var req struct {
+		BaseID    int64 `json:"baseId"`
+		CompareID int64 `json:"compareId"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+	result, err := CompareCampaigns(req.BaseID, req.CompareID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }

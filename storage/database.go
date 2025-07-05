@@ -314,15 +314,7 @@ func ListCampaigns() ([]CampaignInfo, error) {
 
 // GetHostByID retrieves all details for a single host, but only if it belongs to the specified campaign.
 func GetHostByID(hostID int64, campaignID int64) (*model.Host, error) {
-	host := &model.Host{
-		Ports:          make(map[int]model.Port),
-		IPv4Addresses:  make(map[string]bool),
-		Fingerprint:    &model.Fingerprint{},
-		Findings:       make(map[model.FindingCategory][]model.Vulnerability),
-		Communications: make(map[string]*model.Communication),
-		DNSLookups:     make(map[string]bool),
-	}
-
+	host := model.NewHost("")
 	host.ID = hostID
 	var ipAddress, vendor, osGuess, deviceType, clues string
 
@@ -495,10 +487,7 @@ func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, fi
 	return hosts, totalHosts, nil
 }
 
-// NEW: DeleteCampaignByID deletes a campaign and all its associated data.
 func DeleteCampaignByID(id int64) error {
-	// Because of "ON DELETE CASCADE" in the schema, deleting a campaign
-	// will automatically delete all related records in other tables.
 	_, err := DB.Exec("DELETE FROM campaigns WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("could not delete campaign with id %d: %w", id, err)
@@ -657,6 +646,71 @@ func CountHandshakesByCampaign(campaignID int64) (int, error) {
 		return 0, fmt.Errorf("could not count handshakes for campaign %d: %w", campaignID, err)
 	}
 	return count, err
+}
+
+// NEW: GetFullHostsForCampaign fetches all hosts and their related data for a campaign.
+func GetFullHostsForCampaign(campaignID int64) (map[string]*model.Host, error) {
+	hosts := make(map[string]*model.Host)
+
+	// 1. Get all base host info
+	rows, err := DB.Query("SELECT id, mac_address, ip_address, vendor, os_guess, status, device_type FROM hosts WHERE campaign_id = ?", campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query hosts for campaign %d: %w", campaignID, err)
+	}
+	defer rows.Close()
+
+	hostIDtoMac := make(map[int64]string)
+	for rows.Next() {
+		h := model.NewHost("")
+		var ipAddress, vendor, osGuess, deviceType string
+		if err := rows.Scan(&h.ID, &h.MACAddress, &ipAddress, &vendor, &osGuess, &h.Status, &deviceType); err != nil {
+			return nil, err
+		}
+		h.IPv4Addresses[ipAddress] = true
+		h.Fingerprint.Vendor = vendor
+		h.Fingerprint.OperatingSystem = osGuess
+		h.Fingerprint.DeviceType = deviceType
+		hosts[h.MACAddress] = h
+		hostIDtoMac[h.ID] = h.MACAddress
+	}
+
+	// 2. Get all ports for the campaign
+	portRows, err := DB.Query("SELECT host_id, port_number, protocol, state, service, version FROM ports p JOIN hosts h ON p.host_id = h.id WHERE h.campaign_id = ?", campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer portRows.Close()
+	for portRows.Next() {
+		var hostID int64
+		var p model.Port
+		if err := portRows.Scan(&hostID, &p.ID, &p.Protocol, &p.State, &p.Service, &p.Version); err != nil {
+			return nil, err
+		}
+		if mac, ok := hostIDtoMac[hostID]; ok {
+			hosts[mac].Ports[p.ID] = p
+		}
+	}
+
+	// 3. Get all vulnerabilities for the campaign
+	vulnRows, err := DB.Query("SELECT host_id, port_id, cve, description, state, category FROM vulnerabilities v JOIN hosts h ON v.host_id = h.id WHERE h.campaign_id = ?", campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer vulnRows.Close()
+	for vulnRows.Next() {
+		var hostID, portDBID sql.NullInt64
+		var v model.Vulnerability
+		if err := vulnRows.Scan(&hostID, &portDBID, &v.CVE, &v.Description, &v.State, &v.Category); err != nil {
+			return nil, err
+		}
+		if mac, ok := hostIDtoMac[hostID.Int64]; ok {
+			// This part is tricky without a direct port_id -> port_number mapping.
+			// For simplicity in comparison, we'll just append. A more complex app might need to link to the exact port.
+			hosts[mac].Findings[v.Category] = append(hosts[mac].Findings[v.Category], v)
+		}
+	}
+
+	return hosts, nil
 }
 
 type DashboardSummary struct {

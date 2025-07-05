@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compare Campaigns - goNetMap</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #111827; color: #d1d5db; }
+        .card { background-color: #1f2937; border: 1px solid #374151; }
+        select {
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+            background-position: right 0.5rem center;
+            background-repeat: no-repeat;
+            background-size: 1.5em 1.5em;
+            padding-right: 2.5rem;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+    </style>
+</head>
+<body class="font-sans">
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-10">
+            <h1 class="text-4xl font-bold text-white">Compare Campaigns</h1>
+            <a href="/" class="text-blue-400 hover:text-blue-300">&larr; Back to Campaign List</a>
+        </div>
+
+        <!-- Selection Card -->
+        <div class="card rounded-lg p-6 max-w-4xl mx-auto">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
+                <div>
+                    <label for="base-campaign" class="block text-sm font-medium text-gray-300">Base Campaign (Old)</label>
+                    <select id="base-campaign" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 py-2.5">
+                        <option value="">Select a campaign...</option>
+                        {{range .Campaigns}}
+                        <option value="{{.ID}}">{{.Name}} ({{.CreatedAt.Format "Jan 02, 2006"}})</option>
+                        {{end}}
+                    </select>
+                </div>
+                <div>
+                    <label for="comp-campaign" class="block text-sm font-medium text-gray-300">Comparison Campaign (New)</label>
+                    <select id="comp-campaign" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 py-2.5">
+                        <option value="">Select a campaign...</option>
+                        {{range .Campaigns}}
+                        <option value="{{.ID}}">{{.Name}} ({{.CreatedAt.Format "Jan 02, 2006"}})</option>
+                        {{end}}
+                    </select>
+                </div>
+            </div>
+            <div class="mt-6 text-center">
+                <button id="compare-btn" class="w-full md:w-auto px-8 py-3 text-base font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
+                    Compare
+                </button>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results-container" class="mt-10">
+            <!-- Comparison results will be rendered here -->
+        </div>
+
+    </div>
+
+    <script>
+        const baseSelect = document.getElementById('base-campaign');
+        const compSelect = document.getElementById('comp-campaign');
+        const compareBtn = document.getElementById('compare-btn');
+        const resultsContainer = document.getElementById('results-container');
+
+        async function handleCompare() {
+            const baseId = baseSelect.value;
+            const compareId = compSelect.value;
+
+            if (!baseId || !compareId) {
+                alert('Please select both a base and a comparison campaign.');
+                return;
+            }
+            if (baseId === compareId) {
+                alert('Please select two different campaigns to compare.');
+                return;
+            }
+
+            resultsContainer.innerHTML = '<p class="text-center">Comparing campaigns...</p>';
+
+            try {
+                const response = await fetch('/api/compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseId: parseInt(baseId), compareId: parseInt(compareId) }),
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.error || 'Failed to fetch comparison data.');
+                }
+
+                const results = await response.json();
+                renderResults(results);
+
+            } catch (error) {
+                resultsContainer.innerHTML = `<p class="text-center text-red-400">Error: ${error.message}</p>`;
+            }
+        }
+
+        function renderResults(results) {
+            let html = `
+                <h2 class="text-2xl font-bold text-white text-center mb-6">
+                    Comparison: ${results.baseCampaign.Name} vs ${results.compareCampaign.Name}
+                </h2>
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            `;
+
+            // New Hosts
+            html += `
+                <div>
+                    <h3 class="text-xl font-semibold text-green-400 mb-3">New Hosts (${results.newHosts.length})</h3>
+                    <div class="space-y-3">
+                        ${results.newHosts.map(host => `
+                            <div class="card p-3 rounded-lg">
+                                <p class="font-mono text-white">${host.mac_address}</p>
+                                <p class="text-sm text-gray-400">${host.fingerprint.Vendor || 'Unknown Vendor'}</p>
+                            </div>
+                        `).join('') || '<p class="text-sm text-gray-500">None</p>'}
+                    </div>
+                </div>
+            `;
+
+            // Missing Hosts
+            html += `
+                <div>
+                    <h3 class="text-xl font-semibold text-red-400 mb-3">Missing Hosts (${results.missingHosts.length})</h3>
+                    <div class="space-y-3">
+                        ${results.missingHosts.map(host => `
+                            <div class="card p-3 rounded-lg">
+                                <p class="font-mono text-white">${host.mac_address}</p>
+                                <p class="text-sm text-gray-400">${host.fingerprint.Vendor || 'Unknown Vendor'}</p>
+                            </div>
+                        `).join('') || '<p class="text-sm text-gray-500">None</p>'}
+                    </div>
+                </div>
+            `;
+            
+            // Changed Hosts
+            html += `
+                <div>
+                    <h3 class="text-xl font-semibold text-yellow-400 mb-3">Changed Hosts (${results.changedHosts.length})</h3>
+                    <div class="space-y-3">
+                        ${results.changedHosts.map(change => `
+                            <div class="card p-3 rounded-lg">
+                                <p class="font-mono text-white">${change.host.mac_address}</p>
+                                <ul class="text-xs list-disc list-inside mt-2 space-y-1">
+                                    ${change.changes.map(c => `<li>${c}</li>`).join('')}
+                                </ul>
+                            </div>
+                        `).join('') || '<p class="text-sm text-gray-500">None</p>'}
+                    </div>
+                </div>
+            `;
+
+            html += '</div>';
+            resultsContainer.innerHTML = html;
+        }
+
+        compareBtn.addEventListener('click', handleCompare);
+    </script>
+</body>
+</html>
