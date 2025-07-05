@@ -32,6 +32,10 @@ func main() {
 	if err := lookups.InitMac(); err != nil {
 		log.Fatalf("FATAL: Could not initialize MAC lookup service: %v", err)
 	}
+	// NEW: Initialize the GeoIP provider
+	if err := lookups.InitGeoIP(config.Cfg); err != nil {
+		log.Fatalf("FATAL: Could not initialize GeoIP service: %v", err)
+	}
 
 	// --- Command-line flags ---
 	campaignName := flag.String("campaign", "", "Name of the campaign for a new scan.")
@@ -47,7 +51,6 @@ func main() {
 	flag.Parse()
 
 	// FIX: Workaround for shells (like PowerShell) that merge the last flag
-	// into the value of the preceding string flag if it ends with a backslash.
 	if strings.HasSuffix(*dataDir, " -no-ui") {
 		*dataDir = strings.TrimSuffix(*dataDir, " -no-ui")
 		*noUI = true

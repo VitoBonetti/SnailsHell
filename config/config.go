@@ -8,7 +8,6 @@ import (
 )
 
 // Config holds all the configuration for the application.
-// We use yaml tags to specify how the struct fields map to the YAML file.
 type Config struct {
 	Database struct {
 		Path string `yaml:"path"`
@@ -16,6 +15,11 @@ type Config struct {
 	DefaultPaths struct {
 		DataDir string `yaml:"data_dir"`
 	} `yaml:"default_paths"`
+	// NEW: GeoIP struct
+	GeoIP struct {
+		Provider     string `yaml:"provider"`
+		DatabasePath string `yaml:"database_path"`
+	} `yaml:"geoip"`
 }
 
 // Cfg is a global variable that will hold the loaded configuration.
@@ -59,6 +63,14 @@ func createDefaultConfig(path string) error {
 			DataDir string `yaml:"data_dir"`
 		}{
 			DataDir: "./data",
+		},
+		// NEW: Default GeoIP settings
+		GeoIP: struct {
+			Provider     string `yaml:"provider"`
+			DatabasePath string `yaml:"database_path"`
+		}{
+			Provider:     "ip-api",
+			DatabasePath: "./GeoLite2-City.mmdb",
 		},
 	}
 
