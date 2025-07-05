@@ -20,9 +20,10 @@ type Config struct {
 		DatabasePath string `yaml:"database_path"`
 		LicenseKey   string `yaml:"license_key"`
 	} `yaml:"geoip"`
-	// NEW: Nmap struct
 	Nmap struct {
 		Path string `yaml:"path"`
+		// MODIFIED: Type changed from string to []string
+		DefaultArgs []string `yaml:"default_args"`
 	} `yaml:"nmap"`
 }
 
@@ -74,11 +75,13 @@ func createDefaultConfig(path string) error {
 			DatabasePath: "./GeoLite2-City.mmdb",
 			LicenseKey:   "",
 		},
-		// NEW: Default Nmap settings
 		Nmap: struct {
-			Path string `yaml:"path"`
+			Path        string   `yaml:"path"`
+			DefaultArgs []string `yaml:"default_args"`
 		}{
 			Path: "",
+			// MODIFIED: Default arguments are now a slice of strings.
+			DefaultArgs: []string{"-Pn", "-O", "-sV", "--script", "vuln"},
 		},
 	}
 

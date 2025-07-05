@@ -1,7 +1,6 @@
 package livecapture
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"gonetmap/config"
@@ -19,14 +18,12 @@ var nmapPath string
 func InitNmap(cfg *config.Config) error {
 	var err error
 	if cfg.Nmap.Path != "" {
-		// If path is specified, check if it exists
 		if _, err := os.Stat(cfg.Nmap.Path); err == nil {
 			nmapPath = cfg.Nmap.Path
 		} else {
 			return fmt.Errorf("nmap path specified in config.yaml not found: %s", cfg.Nmap.Path)
 		}
 	} else {
-		// Otherwise, search the system PATH
 		nmapPath, err = exec.LookPath("nmap")
 		if err != nil {
 			return fmt.Errorf("nmap executable not found in system PATH. Please install nmap or specify its location in config.yaml")
@@ -41,7 +38,7 @@ func IsNmapFound() bool {
 	return nmapPath != ""
 }
 
-// RunNmapScan executes an nmap scan for the given target and saves the results to the specified campaign.
+// RunNmapScan executes an nmap scan for the given target and saves the results.
 func RunNmapScan(ctx context.Context, target, campaignName string) error {
 	if !IsNmapFound() {
 		return fmt.Errorf("cannot run scan, nmap executable not found")
@@ -52,32 +49,45 @@ func RunNmapScan(ctx context.Context, target, campaignName string) error {
 		return fmt.Errorf("could not get or create campaign '%s': %w", campaignName, err)
 	}
 
-	// Basic nmap command: OS detection, Service versioning, output to XML.
-	// We use '-oX -' to pipe the XML output directly to stdout.
-	args := []string{"-O", "-sV", "-oX", "-", target}
+	tmpFile, err := os.CreateTemp("", "gonetmap-nmap-*.xml")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file for nmap output: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFileName := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary file handle: %w", err)
+	}
+
+	// FIX: Build the argument list programmatically for reliability.
+	// Start with the user's configured default arguments.
+	args := config.Cfg.Nmap.DefaultArgs
+
+	// Add the mandatory XML output argument. This is no longer part of the user config.
+	args = append(args, "-oX", tmpFileName)
+
+	// Finally, add the target.
+	args = append(args, target)
 
 	log.Printf("Executing nmap command: %s %v", nmapPath, args)
 	cmd := exec.CommandContext(ctx, nmapPath, args...)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		log.Printf("Nmap stderr: %s", stderr.String())
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Nmap output:\n%s", string(output))
 		return fmt.Errorf("nmap command failed: %w", err)
 	}
 
-	log.Println("Nmap scan completed successfully. Processing results...")
+	log.Println("Nmap scan completed successfully. Processing results from file...")
 
 	networkMap := model.NewNetworkMap()
-	if err := processing.MergeFromXML(stdout.Bytes(), networkMap); err != nil {
-		return fmt.Errorf("failed to process nmap XML output: %w", err)
+	if err := processing.MergeFromFile(tmpFileName, networkMap); err != nil {
+		// If parsing fails, include some of nmap's output for better debugging.
+		log.Printf("Nmap output for debugging:\n%s", string(output))
+		return fmt.Errorf("failed to process nmap XML output from file %s: %w", tmpFileName, err)
 	}
 
-	// No pcap summary for a pure nmap scan
 	summary := model.NewPcapSummary()
-
 	if err := storage.SaveScanResults(campaignID, networkMap, summary); err != nil {
 		return fmt.Errorf("failed to save nmap scan results: %w", err)
 	}
