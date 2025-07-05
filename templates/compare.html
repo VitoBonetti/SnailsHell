@@ -10,6 +10,12 @@
         body { background-color: #111827; color: #d1d5db; }
         .card { background-color: #1f2937; border: 1px solid #374151; }
         select {
+            /* NEW: Hide the default browser arrow */
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            
+            /* Your existing styles for the custom arrow */
             background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
             background-position: right 0.5rem center;
             background-repeat: no-repeat;
@@ -18,21 +24,20 @@
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
         }
-        /* Style for the collapsible details summary */
         details > summary {
-            list-style: none; /* Hide the default marker */
+            list-style: none;
         }
         details > summary::-webkit-details-marker {
-            display: none; /* Hide the default marker in Chrome */
+            display: none;
         }
         details > summary::after {
-            content: '►'; /* Collapsed state arrow */
+            content: '►';
             float: right;
             transform: rotate(0deg);
             transition: transform 0.2s;
         }
         details[open] > summary::after {
-            transform: rotate(90deg); /* Expanded state arrow */
+            transform: rotate(90deg);
         }
     </style>
 </head>
@@ -82,7 +87,7 @@
         const compSelect = document.getElementById('comp-campaign');
         const compareBtn = document.getElementById('compare-btn');
         const resultsContainer = document.getElementById('results-container');
-        let comparisonChart = null; // To hold the chart instance
+        let comparisonChart = null; 
 
         async function handleCompare() {
             const baseId = baseSelect.value;
@@ -120,12 +125,10 @@
         }
 
         function renderResults(results) {
-            // Destroy previous chart if it exists
             if (comparisonChart) {
                 comparisonChart.destroy();
             }
             
-            // Outer structure with header and containers for chart and details
             let html = `
                 <h2 class="text-3xl font-bold text-white text-center mb-8">
                     Comparison: ${results.baseCampaign.Name} vs ${results.compareCampaign.Name}
@@ -137,7 +140,6 @@
                 <div class="space-y-4">
             `;
 
-            // Function to create a collapsible section
             const createCollapsibleSection = (title, colorClass, count, items, itemRenderer) => {
                 return `
                     <details class="card rounded-lg overflow-hidden" ${count === 0 ? '' : 'open'}>
@@ -153,7 +155,6 @@
                 `;
             };
 
-            // Renderer for New and Missing Hosts
             const hostRenderer = host => `
                 <div class="card p-3 rounded-lg">
                     <p class="font-mono text-white">${host.mac_address}</p>
@@ -161,7 +162,6 @@
                 </div>
             `;
 
-            // Renderer for Changed Hosts
             const changeRenderer = change => `
                 <div class="card p-3 rounded-lg">
                     <p class="font-mono text-white">${change.host.mac_address}</p>
@@ -171,7 +171,6 @@
                 </div>
             `;
 
-            // Append sections
             html += createCollapsibleSection('New Hosts', 'text-green-400', results.newHosts.length, results.newHosts, hostRenderer);
             html += createCollapsibleSection('Missing Hosts', 'text-red-400', results.missingHosts.length, results.missingHosts, hostRenderer);
             html += createCollapsibleSection('Changed Hosts', 'text-yellow-400', results.changedHosts.length, results.changedHosts, changeRenderer);
@@ -179,7 +178,6 @@
             html += '</div>';
             resultsContainer.innerHTML = html;
 
-            // --- Render the Chart ---
             const ctx = document.getElementById('summaryChart').getContext('2d');
             comparisonChart = new Chart(ctx, {
                 type: 'bar',
@@ -189,9 +187,9 @@
                         label: 'Host Changes',
                         data: [results.newHosts.length, results.missingHosts.length, results.changedHosts.length],
                         backgroundColor: [
-                            'rgba(52, 211, 153, 0.5)',  // green-400
-                            'rgba(248, 113, 113, 0.5)', // red-400
-                            'rgba(250, 204, 21, 0.5)'   // yellow-400
+                            'rgba(52, 211, 153, 0.5)',
+                            'rgba(248, 113, 113, 0.5)',
+                            'rgba(250, 204, 21, 0.5)'
                         ],
                         borderColor: [
                             'rgba(52, 211, 153, 1)',
@@ -206,19 +204,19 @@
                         y: {
                             beginAtZero: true,
                             ticks: { 
-                                color: '#d1d5db', // Text color for y-axis
+                                color: '#d1d5db',
                                 stepSize: 1 
                             },
-                            grid: { color: '#374151' } // Grid line color
+                            grid: { color: '#374151' }
                         },
                         x: {
-                            ticks: { color: '#d1d5db' }, // Text color for x-axis
+                            ticks: { color: '#d1d5db' },
                             grid: { color: '#374151' }
                         }
                     },
                     plugins: {
                         legend: {
-                            display: false // We don't need a legend for one dataset
+                            display: false
                         }
                     }
                 }
@@ -240,7 +238,7 @@
         compSelect.addEventListener('change', checkSelections);
         compareBtn.addEventListener('click', handleCompare);
 
-        checkSelections(); // Initial check
+        checkSelections();
     </script>
 </body>
 </html>
