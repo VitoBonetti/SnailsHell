@@ -32,9 +32,11 @@ func main() {
 		log.Fatalf("FATAL: Could not initialize MAC lookup service: %v", err)
 	}
 
-	// --- Command-line flags for one-off actions ---
+	// --- Command-line flags ---
 	campaignName := flag.String("campaign", "", "Name of the campaign for a new scan.")
 	openCampaignName := flag.String("open", "", "Name of the campaign to open in the web UI.")
+	// NEW: Flag to open by ID
+	openCampaignID := flag.Int("open-id", 0, "ID of the campaign to open in the web UI.")
 	listCampaigns := flag.Bool("list", false, "List all existing campaigns in the terminal and exit.")
 	dataDir := flag.String("dir", config.Cfg.DefaultPaths.DataDir, "Directory for file-based scans.")
 	liveCapture := flag.Bool("live", false, "Enable live packet capture mode (requires -campaign and -iface).")
@@ -57,7 +59,6 @@ func main() {
 			log.Fatal("FATAL: A campaign name is required for a live scan (-campaign).")
 		}
 		scanner.RunLiveScanBlocking(*campaignName, *iface)
-		// FIX: Use the returned campaign ID directly.
 		campaignID, _ := storage.GetOrCreateCampaign(*campaignName)
 		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
 		return
@@ -65,19 +66,28 @@ func main() {
 
 	if *campaignName != "" {
 		scanner.RunFileScanBlocking(*campaignName, *dataDir)
-		// FIX: Use the returned campaign ID directly.
 		campaignID, _ := storage.GetOrCreateCampaign(*campaignName)
 		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
 		return
 	}
 
 	if *openCampaignName != "" {
-		// FIX: Use the returned campaign ID directly.
 		campaignID, err := storage.GetOrCreateCampaign(*openCampaignName)
 		if err != nil {
 			log.Fatalf("FATAL: Could not find or create campaign '%s': %v", *openCampaignName, err)
 		}
 		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS)
+		return
+	}
+
+	// NEW: Handle opening by ID
+	if *openCampaignID != 0 {
+		// Check if campaign exists to provide a better error message.
+		_, err := storage.GetCampaignByID(int64(*openCampaignID))
+		if err != nil {
+			log.Fatalf("FATAL: No campaign found with ID %d: %v", *openCampaignID, err)
+		}
+		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", *openCampaignID), templatesFS)
 		return
 	}
 
