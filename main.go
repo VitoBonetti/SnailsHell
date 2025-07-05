@@ -11,6 +11,7 @@ import (
 	"gonetmap/server"
 	"gonetmap/storage"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,18 +36,28 @@ func main() {
 	// --- Command-line flags ---
 	campaignName := flag.String("campaign", "", "Name of the campaign for a new scan.")
 	openCampaignName := flag.String("open", "", "Name of the campaign to open in the web UI.")
-	// NEW: Flag to open by ID
 	openCampaignID := flag.Int("open-id", 0, "ID of the campaign to open in the web UI.")
 	listCampaigns := flag.Bool("list", false, "List all existing campaigns in the terminal and exit.")
 	dataDir := flag.String("dir", config.Cfg.DefaultPaths.DataDir, "Directory for file-based scans.")
 	liveCapture := flag.Bool("live", false, "Enable live packet capture mode (requires -campaign and -iface).")
 	iface := flag.String("iface", "", "Interface for live capture (use -live without this flag to see options).")
+	compareFlag := flag.String("compare", "", "Compare two campaigns by name or ID, separated by a comma. e.g., 'CampaignA,CampaignB' or '1,2'")
 
 	flag.Parse()
 
 	// --- Command-Line Dispatcher ---
 	if *listCampaigns {
 		handleListCampaignsCLI()
+		return
+	}
+
+	// NEW: Handle comparison from CLI
+	if *compareFlag != "" {
+		parts := strings.Split(*compareFlag, ",")
+		if len(parts) != 2 {
+			log.Fatal("FATAL: The -compare flag requires two campaign names or IDs, separated by a comma.")
+		}
+		handleCompareCLI(parts[0], parts[1])
 		return
 	}
 
@@ -80,9 +91,7 @@ func main() {
 		return
 	}
 
-	// NEW: Handle opening by ID
 	if *openCampaignID != 0 {
-		// Check if campaign exists to provide a better error message.
 		_, err := storage.GetCampaignByID(int64(*openCampaignID))
 		if err != nil {
 			log.Fatalf("FATAL: No campaign found with ID %d: %v", *openCampaignID, err)
@@ -137,6 +146,73 @@ func handleListInterfacesCLI() {
 	}
 	fmt.Println("\nTo start a live capture, run the command again with the -iface flag, e.g.:")
 	fmt.Printf("go run . -campaign \"Live Test\" -live -iface \"%s\"\n", devices[0].Name)
+}
+
+func handleCompareCLI(baseIdentifier, compareIdentifier string) {
+	getCampaignID := func(identifier string) int64 {
+		id, err := strconv.ParseInt(identifier, 10, 64)
+		if err == nil {
+			_, err := storage.GetCampaignByID(id)
+			if err != nil {
+				log.Fatalf("FATAL: No campaign found with ID %d: %v", id, err)
+			}
+			return id
+		}
+		id, err = storage.GetOrCreateCampaign(identifier)
+		if err != nil {
+			log.Fatalf("FATAL: Could not find or create campaign '%s': %v", identifier, err)
+		}
+		return id
+	}
+
+	baseID := getCampaignID(baseIdentifier)
+	compareID := getCampaignID(compareIdentifier)
+
+	if baseID == compareID {
+		log.Fatal("FATAL: Cannot compare a campaign with itself. Please provide two different campaigns.")
+	}
+
+	fmt.Printf("Comparing Base Campaign '%s' (ID: %d) with Comparison Campaign '%s' (ID: %d)...\n", baseIdentifier, baseID, compareIdentifier, compareID)
+
+	results, err := server.CompareCampaigns(baseID, compareID)
+	if err != nil {
+		log.Fatalf("FATAL: Failed to compare campaigns: %v", err)
+	}
+
+	fmt.Println("\n--- Comparison Results ---")
+
+	fmt.Printf("\n[+] New Hosts (%d):\n", len(results.NewHosts))
+	if len(results.NewHosts) > 0 {
+		for _, host := range results.NewHosts {
+			fmt.Printf("  - MAC: %s, Vendor: %s\n", host.MACAddress, host.Fingerprint.Vendor)
+		}
+	} else {
+		fmt.Println("  None")
+	}
+
+	fmt.Printf("\n[-] Missing Hosts (%d):\n", len(results.MissingHosts))
+	if len(results.MissingHosts) > 0 {
+		for _, host := range results.MissingHosts {
+			fmt.Printf("  - MAC: %s, Vendor: %s\n", host.MACAddress, host.Fingerprint.Vendor)
+		}
+	} else {
+		fmt.Println("  None")
+	}
+
+	fmt.Printf("\n[*] Changed Hosts (%d):\n", len(results.ChangedHosts))
+	if len(results.ChangedHosts) > 0 {
+		for _, change := range results.ChangedHosts {
+			fmt.Printf("  - MAC: %s\n", change.Host.MACAddress)
+			for _, desc := range change.Changes {
+				fmt.Printf("    - %s\n", desc)
+			}
+		}
+	} else {
+		fmt.Println("  None")
+	}
+
+	fmt.Println("\nLaunching browser to view detailed comparison...")
+	launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/compare?base=%d&compare=%d", baseID, compareID), templatesFS)
 }
 
 func launchServerAndBrowser(url string, fs embed.FS) {

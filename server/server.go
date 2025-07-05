@@ -103,8 +103,13 @@ func handleComparePage(c *gin.Context) {
 		c.String(http.StatusInternalServerError, "Could not load campaigns.")
 		return
 	}
+	baseID, _ := strconv.Atoi(c.DefaultQuery("base", "0"))
+	compareID, _ := strconv.Atoi(c.DefaultQuery("compare", "0"))
+
 	c.HTML(http.StatusOK, "compare.html", gin.H{
-		"Campaigns": campaigns,
+		"Campaigns":         campaigns,
+		"BaseCampaignID":    baseID,
+		"CompareCampaignID": compareID,
 	})
 }
 
