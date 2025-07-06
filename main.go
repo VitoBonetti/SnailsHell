@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"gonetmap/config"
@@ -11,6 +12,8 @@ import (
 	"gonetmap/server"
 	"gonetmap/storage"
 	"log"
+	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -22,10 +25,62 @@ import (
 //go:embed templates/*
 var templatesFS embed.FS
 
+// checkForUpdates fetches the latest release from GitHub and compares versions.
+func checkForUpdates(cfg *config.Config) {
+	re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
+	matches := re.FindStringSubmatch(cfg.Application.GithubURL)
+	if len(matches) < 3 {
+		log.Println("Could not parse GitHub URL for update check.")
+		return
+	}
+	owner, repo := matches[1], matches[2]
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("Update check failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// **FIX**: Handle 404 Not Found gracefully. This occurs when no releases exist.
+	if resp.StatusCode == http.StatusNotFound {
+		log.Println("✅ No public releases found on GitHub. Assuming application is up to date.")
+		return // Not an error, just exit the check.
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Update check failed with status: %s", resp.Status)
+		return
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		log.Printf("Could not decode GitHub API response: %v", err)
+		return
+	}
+
+	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	currentVersion := cfg.Application.Version
+
+	if latestVersion > currentVersion {
+		log.Printf("📢 New version available: %s (current: %s)", release.TagName, currentVersion)
+		cfg.Application.UpdateAvailable = true
+		cfg.Application.LatestVersion = release.TagName
+	} else {
+		log.Println("✅ Application is up to date.")
+	}
+}
+
 func main() {
 	if err := config.LoadConfig(); err != nil {
 		log.Fatalf("FATAL: Could not load configuration: %v", err)
 	}
+
+	go checkForUpdates(config.Cfg)
 
 	if err := storage.InitDB(config.Cfg.Database.Path); err != nil {
 		log.Fatalf("FATAL: Could not initialize database: %v", err)
@@ -89,10 +144,7 @@ func main() {
 		}
 
 		var selectedDeviceName string
-		// Try to parse the -iface argument as an integer (index)
-		ifaceIndex, err := strconv.Atoi(*iface)
-		if err == nil {
-			// It's an integer. Treat it as a 1-based index.
+		if ifaceIndex, err := strconv.Atoi(*iface); err == nil {
 			if ifaceIndex > 0 && ifaceIndex <= len(devices) {
 				selectedDeviceName = devices[ifaceIndex-1].Name
 				fmt.Printf("✅ Using interface [%d]: %s\n", ifaceIndex, devices[ifaceIndex-1].Description)
@@ -100,7 +152,6 @@ func main() {
 				log.Fatalf("FATAL: Invalid interface index '%d'. Please choose a number between 1 and %d.", ifaceIndex, len(devices))
 			}
 		} else {
-			// It's not an integer. Treat it as a full device name.
 			selectedDeviceName = *iface
 			found := false
 			for _, d := range devices {
@@ -176,7 +227,6 @@ func handleListCampaignsCLI() {
 	}
 }
 
-// handleListInterfacesCLI now prints a user-friendly, indexed list.
 func handleListInterfacesCLI(devices []pcap.Interface) {
 	if len(devices) == 0 {
 		fmt.Println("No network interfaces found. Make sure you have the necessary permissions.")

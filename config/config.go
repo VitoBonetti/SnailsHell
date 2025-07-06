@@ -10,9 +10,11 @@ import (
 // Config holds all the configuration for the application.
 type Config struct {
 	Application struct {
-		Name      string `yaml:"name"`
-		Version   string `yaml:"version"`
-		GithubURL string `yaml:"github_url"`
+		Name            string `yaml:"name"`
+		Version         string `yaml:"version"`
+		GithubURL       string `yaml:"github_url"`
+		UpdateAvailable bool   `yaml:"-"` // Won't be read/written to config.yaml
+		LatestVersion   string `yaml:"-"` // Won't be read/written to config.yaml
 	} `yaml:"application"`
 	Database struct {
 		Path string `yaml:"path"`
@@ -26,8 +28,7 @@ type Config struct {
 		LicenseKey   string `yaml:"license_key"`
 	} `yaml:"geoip"`
 	Nmap struct {
-		Path string `yaml:"path"`
-		// MODIFIED: Type changed from string to []string
+		Path        string   `yaml:"path"`
 		DefaultArgs []string `yaml:"default_args"`
 	} `yaml:"nmap"`
 }
@@ -62,9 +63,11 @@ func LoadConfig() error {
 func createDefaultConfig(path string) error {
 	defaultConfig := Config{
 		Application: struct {
-			Name      string `yaml:"name"`
-			Version   string `yaml:"version"`
-			GithubURL string `yaml:"github_url"`
+			Name            string `yaml:"name"`
+			Version         string `yaml:"version"`
+			GithubURL       string `yaml:"github_url"`
+			UpdateAvailable bool   `yaml:"-"`
+			LatestVersion   string `yaml:"-"`
 		}{
 			Name:      "goNetMap",
 			Version:   "1.0.0",
@@ -93,8 +96,7 @@ func createDefaultConfig(path string) error {
 			Path        string   `yaml:"path"`
 			DefaultArgs []string `yaml:"default_args"`
 		}{
-			Path: "",
-			// MODIFIED: Default arguments are now a slice of strings.
+			Path:        "",
 			DefaultArgs: []string{"-Pn", "-O", "-sV", "--script", "vuln"},
 		},
 	}
