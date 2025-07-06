@@ -67,7 +67,8 @@ func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, er
 		sm.cancelFunc = nil
 		sm.mu.Unlock()
 
-		<-time.After(15 * time.Second)
+		// **FIX**: Shorten the time the final status is held to prevent UI race conditions.
+		<-time.After(5 * time.Second)
 		sm.mu.Lock()
 		if !strings.HasPrefix(sm.Status, "Scanning:") {
 			sm.Status = "Idle"
@@ -124,7 +125,8 @@ func (sm *ScanManager) StartLiveScanTask(campaignName, interfaceName string) (in
 		sm.cancelFunc = nil
 		sm.mu.Unlock()
 
-		<-time.After(15 * time.Second)
+		// **FIX**: Shorten the time the final status is held.
+		<-time.After(5 * time.Second)
 		sm.mu.Lock()
 		if !strings.HasPrefix(sm.Status, "Scanning:") {
 			sm.Status = "Idle"
@@ -166,7 +168,8 @@ func (sm *ScanManager) StartFileScanTask(campaignName, dataDir string) (int64, e
 		sm.cancelFunc = nil
 		sm.mu.Unlock()
 
-		<-time.After(15 * time.Second)
+		// **FIX**: Shorten the time the final status is held.
+		<-time.After(5 * time.Second)
 		sm.mu.Lock()
 		if !strings.HasPrefix(sm.Status, "Scanning:") {
 			sm.Status = "Idle"
@@ -205,18 +208,18 @@ func (sm *ScanManager) GetStatus() (bool, string) {
 
 func RunNmapScanBlocking(campaignName, target string) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // **FIX 1**: Ensure context is always cancelled when the function exits.
+	defer cancel()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(c) // **FIX 2**: Stop listening for signals on this channel when the function exits.
+	defer signal.Stop(c)
 
 	go func() {
 		select {
 		case <-c:
 			cancel()
 		case <-ctx.Done():
-			return // Context was cancelled elsewhere (e.g., scan finished), so exit goroutine.
+			return
 		}
 	}()
 
@@ -243,11 +246,11 @@ func RunNmapScanBlocking(campaignName, target string) {
 
 func RunLiveScanBlocking(campaignName, interfaceName string) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // **FIX 1**: Ensure context is always cancelled when the function exits.
+	defer cancel()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(c) // **FIX 2**: Stop listening for signals on this channel when the function exits.
+	defer signal.Stop(c)
 
 	go func() {
 		select {
@@ -255,7 +258,7 @@ func RunLiveScanBlocking(campaignName, interfaceName string) {
 			fmt.Println("\n🛑 Stopping capture...")
 			cancel()
 		case <-ctx.Done():
-			return // Context was cancelled elsewhere (e.g., scan finished), so exit goroutine.
+			return
 		}
 	}()
 
