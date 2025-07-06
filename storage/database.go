@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"SnailsHell/migrations"
 	"SnailsHell/model"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,10 @@ import (
 
 var DB *sql.DB
 
+// LatestSchemaVersion defines the most recent schema version this application supports.
+const LatestSchemaVersion = 2
+
+// InitDB initializes the database connection and runs schema migrations.
 func InitDB(filepath string) error {
 	var err error
 	DB, err = sql.Open("sqlite", filepath)
@@ -28,118 +34,77 @@ func InitDB(filepath string) error {
 	if err != nil {
 		return fmt.Errorf("could not enable foreign keys: %w", err)
 	}
-	return createTables()
+
+	// Run migrations to create or update the database schema
+	return migrateDB(DB)
 }
 
-func createTables() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS campaigns (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL UNIQUE,
-		created_at DATETIME NOT NULL
-	);
-	CREATE TABLE IF NOT EXISTS hosts (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		campaign_id INTEGER NOT NULL,
-		mac_address TEXT NOT NULL,
-		ip_address TEXT,
-		os_guess TEXT,
-		vendor TEXT,
-		status TEXT,
-		discovered_by TEXT,
-		device_type TEXT,          
-		behavioral_clues TEXT, 
-		FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
-		UNIQUE(campaign_id, mac_address)
-	);
-	
-	CREATE TABLE IF NOT EXISTS ports (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		host_id INTEGER NOT NULL,
-		port_number INTEGER NOT NULL,
-		protocol TEXT NOT NULL,
-		state TEXT,
-		service TEXT,
-		version TEXT,
-		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
-		UNIQUE(host_id, port_number, protocol)
-	);
-
-	CREATE TABLE IF NOT EXISTS vulnerabilities (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		host_id INTEGER NOT NULL,
-		port_id INTEGER,
-		cve TEXT,
-		description TEXT,
-		state TEXT,
-		category TEXT,
-		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
-		FOREIGN KEY(port_id) REFERENCES ports(id) ON DELETE CASCADE
-	);
-	CREATE TABLE IF NOT EXISTS communications (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		host_id INTEGER NOT NULL,
-		counterpart_ip TEXT NOT NULL,
-		packet_count INTEGER,
-		geo_country TEXT,
-		geo_city TEXT,
-		geo_isp TEXT,
-		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE
-	);
-	CREATE TABLE IF NOT EXISTS dns_lookups (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		host_id INTEGER NOT NULL,
-		domain TEXT NOT NULL,
-		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
-		UNIQUE(host_id, domain)
-	);
-	CREATE TABLE IF NOT EXISTS handshakes (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		campaign_id INTEGER NOT NULL,
-		ap_mac TEXT NOT NULL,
-		client_mac TEXT NOT NULL,
-		ssid TEXT,
-		state TEXT,
-		pcap_file TEXT,
-		hccapx_data BLOB,
-		FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
-	);
-	CREATE TABLE IF NOT EXISTS credentials (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		campaign_id INTEGER NOT NULL,
-		host_id INTEGER NOT NULL,
-		endpoint TEXT,
-		type TEXT,
-		value TEXT,
-		pcap_file TEXT,
-		FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
-		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE
-	);
-	CREATE TABLE IF NOT EXISTS web_responses (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		host_id INTEGER NOT NULL,
-		port_id INTEGER NOT NULL,
-		method TEXT NOT NULL,
-		status_code INTEGER,
-		headers TEXT,
-		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
-		FOREIGN KEY(port_id) REFERENCES ports(id) ON DELETE CASCADE
-	);
-	CREATE TABLE IF NOT EXISTS screenshots (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		host_id INTEGER NOT NULL,
-		port_id INTEGER NOT NULL,
-		image_data BLOB,
-		capture_time DATETIME,
-		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
-		FOREIGN KEY(port_id) REFERENCES ports(id) ON DELETE CASCADE
-	);
-	`
-	if _, err := DB.Exec(schema); err != nil {
-		return fmt.Errorf("could not create database schema: %w", err)
+// migrateDB handles the creation and updating of the database schema.
+func migrateDB(db *sql.DB) error {
+	// 1. Ensure the meta table for versioning exists.
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS db_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );`)
+	if err != nil {
+		return fmt.Errorf("could not create db_meta table: %w", err)
 	}
-	fmt.Println("✅ Database schema initialized successfully.")
-	return nil
+
+	// 2. Get the current version from the database.
+	var currentVersionStr string
+	err = db.QueryRow("SELECT value FROM db_meta WHERE key = 'version'").Scan(&currentVersionStr)
+
+	var currentVersion int
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// If the 'version' key doesn't exist, this is a fresh database.
+			currentVersion = 0
+		} else {
+			return fmt.Errorf("could not query schema version: %w", err)
+		}
+	} else {
+		currentVersion, _ = strconv.Atoi(currentVersionStr)
+	}
+
+	fmt.Printf("Database schema version: %d. Application requires version: %d.\n", currentVersion, LatestSchemaVersion)
+
+	// 3. Apply migrations if the database is out of date.
+	if currentVersion >= LatestSchemaVersion {
+		fmt.Println("✅ Database schema is up to date.")
+		return nil
+	}
+
+	fmt.Println("Database schema is outdated. Applying migrations...")
+
+	// Get all defined migrations.
+	migrations := migrations.GetMigrations()
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].Version < migrations[j].Version
+	})
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("could not begin migration transaction: %w", err)
+	}
+	defer tx.Rollback() // Rollback on error
+
+	for _, m := range migrations {
+		if m.Version > currentVersion {
+			fmt.Printf(" -> Applying migration version %d...\n", m.Version)
+			if _, err := tx.Exec(m.Script); err != nil {
+				return fmt.Errorf("failed to apply migration version %d: %w", m.Version, err)
+			}
+		}
+	}
+
+	// 4. Update the version number in the meta table.
+	updateVersionStmt := `INSERT OR REPLACE INTO db_meta (key, value) VALUES ('version', ?);`
+	if _, err := tx.Exec(updateVersionStmt, strconv.Itoa(LatestSchemaVersion)); err != nil {
+		return fmt.Errorf("failed to update schema version in db_meta: %w", err)
+	}
+
+	fmt.Println("✅ Database migration successful.")
+	return tx.Commit()
 }
 
 // SaveScanResults intelligently saves or merges host data into the database.
@@ -320,6 +285,8 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 
 	return tx.Commit()
 }
+
+// GetOrCreateCampaign gets the ID of a campaign by name, creating it if it doesn't exist.
 func GetOrCreateCampaign(name string) (int64, error) {
 	var campaignID int64
 	err := DB.QueryRow("SELECT id FROM campaigns WHERE name = ?", name).Scan(&campaignID)
@@ -530,7 +497,7 @@ func GetHostByID(hostID int64, campaignID int64) (*model.Host, error) {
 	return host, nil
 }
 
-// ... (rest of the file is the same as the previous step)
+// GetCampaignByID retrieves details for a single campaign by its ID.
 func GetCampaignByID(id int64) (*CampaignInfo, error) {
 	var c CampaignInfo
 	err := DB.QueryRow("SELECT id, name, created_at FROM campaigns WHERE id = ?", id).Scan(&c.ID, &c.Name, &c.CreatedAt)
@@ -543,6 +510,7 @@ func GetCampaignByID(id int64) (*CampaignInfo, error) {
 	return &c, nil
 }
 
+// GetHostsByCampaignPaginated retrieves a paginated list of hosts for a given campaign.
 func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, filter string) ([]HostInfo, int, error) {
 	var hosts []HostInfo
 	var totalHosts int
@@ -604,6 +572,7 @@ func GetHostsByCampaignPaginated(campaignID int64, limit, offset int, search, fi
 	return hosts, totalHosts, nil
 }
 
+// DeleteCampaignByID removes a campaign and all its associated data from the database.
 func DeleteCampaignByID(id int64) error {
 	_, err := DB.Exec("DELETE FROM campaigns WHERE id = ?", id)
 	if err != nil {
@@ -612,6 +581,7 @@ func DeleteCampaignByID(id int64) error {
 	return nil
 }
 
+// GetAllHostsForReport retrieves all hosts for a campaign for report generation.
 func GetAllHostsForReport(campaignID int64) ([]ReportHostInfo, error) {
 	query := `
         SELECT
@@ -636,6 +606,7 @@ func GetAllHostsForReport(campaignID int64) ([]ReportHostInfo, error) {
 	return hosts, nil
 }
 
+// GetAllPortsForReport retrieves all ports for a campaign for report generation.
 func GetAllPortsForReport(campaignID int64) ([][]string, error) {
 	query := `
         SELECT h.mac_address, p.port_number, p.protocol, p.state, p.service, p.version
@@ -660,6 +631,7 @@ func GetAllPortsForReport(campaignID int64) ([][]string, error) {
 	return results, nil
 }
 
+// GetAllVulnsForReport retrieves all vulnerabilities for a campaign for report generation.
 func GetAllVulnsForReport(campaignID int64) ([][]string, error) {
 	query := `
         SELECT h.mac_address, v.cve, v.category, v.state, v.description
@@ -682,6 +654,7 @@ func GetAllVulnsForReport(campaignID int64) ([][]string, error) {
 	return results, nil
 }
 
+// GetAllCommsForReport retrieves all communications for a campaign for report generation.
 func GetAllCommsForReport(campaignID int64) ([][]string, error) {
 	query := `
         SELECT h.mac_address, c.counterpart_ip, c.packet_count, c.geo_city, c.geo_country, c.geo_isp
@@ -705,6 +678,7 @@ func GetAllCommsForReport(campaignID int64) ([][]string, error) {
 	return results, nil
 }
 
+// GetAllDNSForReport retrieves all DNS lookups for a campaign for report generation.
 func GetAllDNSForReport(campaignID int64) ([][]string, error) {
 	query := `
         SELECT h.mac_address, d.domain
@@ -727,6 +701,7 @@ func GetAllDNSForReport(campaignID int64) ([][]string, error) {
 	return results, nil
 }
 
+// GetHandshakesByCampaignPaginated retrieves a paginated list of handshakes for a campaign.
 func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]model.ReportHandshakeInfo, error) {
 	rows, err := DB.Query(`
 		SELECT id, ap_mac, client_mac, ssid, pcap_file, hccapx_data
@@ -752,10 +727,12 @@ func GetHandshakesByCampaignPaginated(campaignID int64, limit, offset int) ([]mo
 	return handshakes, nil
 }
 
+// GetAllHandshakesForReport retrieves all handshakes for a campaign for report generation.
 func GetAllHandshakesForReport(campaignID int64) ([]model.ReportHandshakeInfo, error) {
 	return GetHandshakesByCampaignPaginated(campaignID, 10000, 0)
 }
 
+// CountHandshakesByCampaign counts the number of handshakes for a campaign.
 func CountHandshakesByCampaign(campaignID int64) (int, error) {
 	var count int
 	err := DB.QueryRow("SELECT COUNT(*) FROM handshakes WHERE campaign_id = ?", campaignID).Scan(&count)
@@ -765,6 +742,7 @@ func CountHandshakesByCampaign(campaignID int64) (int, error) {
 	return count, err
 }
 
+// GetFullHostsForCampaign retrieves all hosts and their related data for a campaign.
 func GetFullHostsForCampaign(campaignID int64) (map[string]*model.Host, error) {
 	hosts := make(map[string]*model.Host)
 
@@ -824,6 +802,7 @@ func GetFullHostsForCampaign(campaignID int64) (map[string]*model.Host, error) {
 	return hosts, nil
 }
 
+// DashboardSummary holds aggregated data for the main dashboard view.
 type DashboardSummary struct {
 	TotalHosts                int
 	HostsUp                   int
@@ -837,6 +816,7 @@ type DashboardSummary struct {
 	TotalVulnerabilitiesCount int
 }
 
+// GetDashboardSummary retrieves aggregated data for the dashboard.
 func GetDashboardSummary(campaignID int64) (*DashboardSummary, error) {
 	summary := &DashboardSummary{}
 	var err error
@@ -900,6 +880,7 @@ func GetDashboardSummary(campaignID int64) (*DashboardSummary, error) {
 	return summary, nil
 }
 
+// GetCredentialsByCampaign retrieves all credentials for a campaign.
 func GetCredentialsByCampaign(campaignID int64) ([]model.Credential, error) {
 	rows, err := DB.Query(`
 		SELECT c.id, c.endpoint, c.type, c.value, c.pcap_file, h.mac_address
@@ -923,6 +904,7 @@ func GetCredentialsByCampaign(campaignID int64) ([]model.Credential, error) {
 	return credentials, nil
 }
 
+// CountCredentialsByCampaign counts the number of credentials for a campaign.
 func CountCredentialsByCampaign(campaignID int64) (int, error) {
 	var count int
 	err := DB.QueryRow("SELECT COUNT(*) FROM credentials WHERE campaign_id = ?", campaignID).Scan(&count)
