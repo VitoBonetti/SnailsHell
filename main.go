@@ -92,9 +92,13 @@ func main() {
 			log.Fatal("FATAL: A campaign name is required for an Nmap scan (-campaign).")
 		}
 		scanner.RunNmapScanBlocking(*campaignName, *nmapTarget)
+		// **FIX**: Launch the UI after the scan, just like other scan types.
+		campaignID, _ := storage.GetOrCreateCampaign(*campaignName)
+		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS, *noUI)
 		return
 	}
 
+	// This handles file-based scans (`-dir`) that are not live or nmap scans
 	if *campaignName != "" {
 		if err := scanner.RunFileScanBlocking(*campaignName, *dataDir); err != nil {
 			log.Fatalf("FATAL: File scan failed: %v", err)
