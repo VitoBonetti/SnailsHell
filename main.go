@@ -35,7 +35,6 @@ func main() {
 	if err := lookups.InitGeoIP(config.Cfg); err != nil {
 		log.Fatalf("FATAL: Could not initialize GeoIP service: %v", err)
 	}
-	// NEW: Initialize Nmap runner. This is not fatal if nmap is not found.
 	if err := livecapture.InitNmap(config.Cfg); err != nil {
 		log.Printf("WARNING: %v", err)
 	}
@@ -49,11 +48,11 @@ func main() {
 	liveCapture := flag.Bool("live", false, "Enable live packet capture mode (requires -campaign and -iface).")
 	iface := flag.String("iface", "", "Interface for live capture (use -live without this flag to see options).")
 	compareFlag := flag.String("compare", "", "Compare two campaigns by name or ID, separated by a comma. e.g., 'CampaignA,CampaignB' or '1,2'")
+	nmapTarget := flag.String("nmap", "", "Run a live Nmap scan on the specified target (requires -campaign).")
 	noUI := flag.Bool("no-ui", false, "Run in CLI-only mode without starting the web server.")
 
 	flag.Parse()
 
-	// FIX: Workaround for shells (like PowerShell) that merge the last flag
 	if strings.HasSuffix(*dataDir, " -no-ui") {
 		*dataDir = strings.TrimSuffix(*dataDir, " -no-ui")
 		*noUI = true
@@ -88,6 +87,14 @@ func main() {
 		return
 	}
 
+	if *nmapTarget != "" {
+		if *campaignName == "" {
+			log.Fatal("FATAL: A campaign name is required for an Nmap scan (-campaign).")
+		}
+		scanner.RunNmapScanBlocking(*campaignName, *nmapTarget)
+		return
+	}
+
 	if *campaignName != "" {
 		if err := scanner.RunFileScanBlocking(*campaignName, *dataDir); err != nil {
 			log.Fatalf("FATAL: File scan failed: %v", err)
@@ -115,7 +122,6 @@ func main() {
 		return
 	}
 
-	// Default action: Start the server if no other flags are provided.
 	fmt.Println("✅ Starting server...")
 	launchServerAndBrowser("http://localhost:8080/", templatesFS, *noUI)
 }
@@ -245,5 +251,5 @@ func launchServerAndBrowser(url string, fs embed.FS, noUI bool) {
 		}()
 	}
 
-	select {} // Keep the application running
+	select {}
 }

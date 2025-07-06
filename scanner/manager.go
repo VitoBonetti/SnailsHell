@@ -18,7 +18,6 @@ import (
 	"time"
 )
 
-// ScanManager holds the state of the currently active scan.
 type ScanManager struct {
 	mu         sync.Mutex
 	IsScanning bool
@@ -26,12 +25,10 @@ type ScanManager struct {
 	cancelFunc context.CancelFunc
 }
 
-// Global instance of the scan manager.
 var Manager = &ScanManager{Status: "Idle"}
 
 // --- UI-Driven (Asynchronous) Scan Functions ---
 
-// StartNmapScanTask starts an nmap scan as a background task.
 func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, error) {
 	sm.mu.Lock()
 	if sm.IsScanning {
@@ -58,14 +55,13 @@ func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, er
 	go func() {
 		defer sm.resetState()
 		log.Printf("Starting nmap scan for campaign '%s' on target '%s'", campaignName, target)
-		err := livecapture.RunNmapScan(ctx, target, campaignName) // This now correctly expects only one return value (error)
+		// Corrected to handle the two return values from RunNmapScan
+		_, err := livecapture.RunNmapScan(ctx, target, campaignName)
 		if err != nil {
 			log.Printf("Error during nmap scan for campaign '%s': %v", campaignName, err)
 			sm.mu.Lock()
-			// Update status with error for user feedback
 			sm.Status = fmt.Sprintf("Nmap scan failed: %v", err)
 			sm.mu.Unlock()
-			// Keep the error message for a bit before resetting to Idle
 			<-time.After(10 * time.Second)
 			return
 		}
@@ -179,6 +175,34 @@ func (sm *ScanManager) GetStatus() (bool, string) {
 
 // --- CLI-Driven (Synchronous) Scan Functions ---
 
+// NEW: Blocking Nmap scan function for CLI use that prints results.
+func RunNmapScanBlocking(campaignName, target string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-c
+		fmt.Println("\n🛑 Stopping Nmap scan...")
+		cancel()
+	}()
+
+	fmt.Printf("🚀 Starting Nmap scan on target '%s'. Press Ctrl+C to stop.\n", target)
+	networkMap, err := livecapture.RunNmapScan(ctx, target, campaignName)
+	if err != nil {
+		log.Fatalf("FATAL: Nmap scan failed: %v", err)
+	}
+
+	fmt.Println("\n--- 📡 Nmap Scan Results ---")
+	if networkMap == nil || len(networkMap.Hosts) == 0 {
+		fmt.Println("No hosts found.")
+		return
+	}
+
+	printHostResults(networkMap.Hosts)
+	fmt.Println("✅ Nmap scan results processed and saved.")
+}
+
 func RunLiveScanBlocking(campaignName, interfaceName string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := make(chan os.Signal, 1)
@@ -209,6 +233,12 @@ func RunLiveScanBlocking(campaignName, interfaceName string) {
 	fmt.Println("\n--- Finalizing data ---")
 	processing.ProcessHandshakes(masterMap, globalSummary)
 	processing.EnrichWithLookups(masterMap, globalSummary)
+
+	// **UPDATED**: Print all discovered hosts from the live capture.
+	if len(masterMap.Hosts) > 0 {
+		fmt.Println("\n--- 🔎 Discovered Hosts ---")
+		printHostResults(masterMap.Hosts)
+	}
 
 	if len(globalSummary.CapturedHandshakes) > 0 {
 		fmt.Println("\n--- 🤝 Captured Handshakes ---")
@@ -259,39 +289,16 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) error {
 	processing.ProcessHandshakes(masterMap, globalSummary)
 	processing.EnrichWithLookups(masterMap, globalSummary)
 
-	nmapHosts := []*model.Host{}
-	for _, host := range masterMap.Hosts {
+	nmapHosts := make(map[string]*model.Host)
+	for key, host := range masterMap.Hosts {
 		if host.DiscoveredBy == "Nmap" {
-			nmapHosts = append(nmapHosts, host)
+			nmapHosts[key] = host
 		}
 	}
 
 	if len(nmapHosts) > 0 {
 		fmt.Println("\n--- 📡 Nmap Scan Results ---")
-		sort.Slice(nmapHosts, func(i, j int) bool {
-			return nmapHosts[i].MACAddress < nmapHosts[j].MACAddress
-		})
-		for _, host := range nmapHosts {
-			fmt.Printf("Host: %s (%s)\n", host.MACAddress, host.Fingerprint.Vendor)
-			fmt.Printf("  - Status: %s\n", host.Status)
-			var ips []string
-			for ip := range host.IPv4Addresses {
-				ips = append(ips, ip)
-			}
-			if len(ips) > 0 {
-				fmt.Printf("  - IP Addresses: %s\n", strings.Join(ips, ", "))
-			}
-			if host.Fingerprint.OperatingSystem != "" {
-				fmt.Printf("  - OS Guess: %s\n", host.Fingerprint.OperatingSystem)
-			}
-			if len(host.Ports) > 0 {
-				fmt.Println("  - Open Ports:")
-				for _, port := range host.Ports {
-					fmt.Printf("    - %d/%s (%s): %s\n", port.ID, port.Protocol, port.State, port.Version)
-				}
-			}
-			fmt.Println("--------------------")
-		}
+		printHostResults(nmapHosts)
 	}
 
 	if len(globalSummary.CapturedHandshakes) > 0 {
@@ -312,6 +319,44 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) error {
 	}
 	fmt.Println("✅ Scan results saved successfully.")
 	return nil
+}
+
+// NEW: Helper function to print host results to the console.
+func printHostResults(hostMap map[string]*model.Host) {
+	var hosts []*model.Host
+	for _, host := range hostMap {
+		hosts = append(hosts, host)
+	}
+	sort.Slice(hosts, func(i, j int) bool {
+		return hosts[i].MACAddress < hosts[j].MACAddress
+	})
+
+	for _, host := range hosts {
+		fmt.Printf("Host: %s (%s)\n", host.MACAddress, host.Fingerprint.Vendor)
+		if host.Status != "" {
+			fmt.Printf("  - Status: %s\n", host.Status)
+		}
+
+		var ips []string
+		for ip := range host.IPv4Addresses {
+			ips = append(ips, ip)
+		}
+		if len(ips) > 0 {
+			fmt.Printf("  - IP Addresses: %s\n", strings.Join(ips, ", "))
+		}
+
+		if host.Fingerprint.OperatingSystem != "" {
+			fmt.Printf("  - OS Guess: %s\n", host.Fingerprint.OperatingSystem)
+		}
+
+		if len(host.Ports) > 0 {
+			fmt.Println("  - Open Ports:")
+			for _, port := range host.Ports {
+				fmt.Printf("    - %d/%s (%s): %s\n", port.ID, port.Protocol, port.State, port.Version)
+			}
+		}
+		fmt.Println("--------------------")
+	}
 }
 
 func findDataFiles(rootDir string) ([]string, []string, error) {
