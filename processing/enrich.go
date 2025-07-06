@@ -1,9 +1,9 @@
 package processing
 
 import (
+	"SnailsHell/lookups"
+	"SnailsHell/model"
 	"fmt"
-	"gonetmap/lookups"
-	"gonetmap/model"
 	"log"
 )
 

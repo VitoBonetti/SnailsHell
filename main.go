@@ -1,16 +1,16 @@
 package main
 
 import (
+	"SnailsHell/config"
+	"SnailsHell/livecapture"
+	"SnailsHell/lookups"
+	"SnailsHell/scanner"
+	"SnailsHell/server"
+	"SnailsHell/storage"
 	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"gonetmap/config"
-	"gonetmap/livecapture"
-	"gonetmap/lookups"
-	"gonetmap/scanner"
-	"gonetmap/server"
-	"gonetmap/storage"
 	"log"
 	"net/http"
 	"regexp"

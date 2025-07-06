@@ -70,7 +70,7 @@ func createDefaultConfig(path string) error {
 			LatestVersion   string `yaml:"-"`
 		}{
 			Name:      "SnailsHell",
-			Version:   "1.0.1",
+			Version:   "1.0.2",
 			GithubURL: "https://github.com/VitoBonetti/SnailsHell",
 		},
 		Database: struct {

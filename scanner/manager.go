@@ -1,12 +1,12 @@
 package scanner
 
 import (
+	"SnailsHell/livecapture"
+	"SnailsHell/model"
+	"SnailsHell/processing"
+	"SnailsHell/storage"
 	"context"
 	"fmt"
-	"gonetmap/livecapture"
-	"gonetmap/model"
-	"gonetmap/processing"
-	"gonetmap/storage"
 	"log"
 	"os"
 	"os/signal"

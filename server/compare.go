@@ -1,9 +1,9 @@
 package server
 
 import (
+	"SnailsHell/model"
+	"SnailsHell/storage"
 	"fmt"
-	"gonetmap/model"
-	"gonetmap/storage"
 )
 
 // ComparisonResult holds the results of comparing two campaigns.

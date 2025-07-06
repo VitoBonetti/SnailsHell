@@ -1,12 +1,12 @@
 package lookups
 
 import (
+	"SnailsHell/config"
+	"SnailsHell/model"
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
-	"gonetmap/config"
-	"gonetmap/model"
 	"io"
 	"net"
 	"net/http"

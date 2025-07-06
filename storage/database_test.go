@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"gonetmap/model"
+	"SnailsHell/model"
 	"testing"
 )
 

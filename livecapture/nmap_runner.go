@@ -1,13 +1,13 @@
 package livecapture
 
 import (
+	"SnailsHell/config"
+	"SnailsHell/model"
+	"SnailsHell/processing"
+	"SnailsHell/storage"
 	"bufio"
 	"context"
 	"fmt"
-	"gonetmap/config"
-	"gonetmap/model"
-	"gonetmap/processing"
-	"gonetmap/storage"
 	"io"
 	"log"
 	"os"

@@ -1,12 +1,12 @@
 package server
 
 import (
+	"SnailsHell/config"
+	"SnailsHell/livecapture"
+	"SnailsHell/scanner"
+	"SnailsHell/storage"
 	"embed"
 	"fmt"
-	"gonetmap/config"
-	"gonetmap/livecapture"
-	"gonetmap/scanner"
-	"gonetmap/storage"
 	"html/template"
 	"log"
 	"net/http"

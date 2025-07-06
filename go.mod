@@ -1,4 +1,4 @@
-module snailshell
+module SnailsHell
 
 go 1.24.4
 

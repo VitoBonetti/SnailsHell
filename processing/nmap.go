@@ -1,9 +1,9 @@
 package processing
 
 import (
+	"SnailsHell/model"
 	"encoding/xml"
 	"fmt"
-	"gonetmap/model"
 	"io"
 	"os"
 	"strings"

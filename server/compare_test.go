@@ -1,8 +1,8 @@
 package server
 
 import (
-	"gonetmap/model"
-	"gonetmap/storage"
+	"SnailsHell/model"
+	"SnailsHell/storage"
 	"testing"
 )
 

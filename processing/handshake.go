@@ -1,8 +1,8 @@
 package processing
 
 import (
+	"SnailsHell/model"
 	"encoding/binary"
-	"gonetmap/model"
 	"strings"
 
 	"github.com/google/gopacket/layers"

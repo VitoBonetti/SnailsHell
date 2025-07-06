@@ -1,10 +1,10 @@
 package livecapture
 
 import (
+	"SnailsHell/model"
+	"SnailsHell/processing"
 	"context"
 	"fmt"
-	"gonetmap/model"
-	"gonetmap/processing"
 	"time"
 
 	"github.com/google/gopacket"

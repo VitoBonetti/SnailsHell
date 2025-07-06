@@ -1,7 +1,7 @@
 package processing
 
 import (
-	"gonetmap/model"
+	"SnailsHell/model"
 	"os"
 	"testing"
 )
