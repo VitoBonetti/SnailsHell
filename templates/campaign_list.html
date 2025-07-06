@@ -49,7 +49,9 @@
                         <p class="text-sm text-gray-400 mt-1">Created: {{.CreatedAt.Format "Jan 02, 2006 15:04:05"}}</p>
                     </a>
                     <div class="mt-4 flex justify-end items-center gap-4">
-                        <button onclick="openLiveScanModal('{{.Name}}')" class="text-sm text-blue-400 hover:text-blue-300 font-semibold">Add Capture</button>
+                        <!-- **NEW**: Add Nmap Scan button for existing campaigns -->
+                        <button onclick="openNmapScanModal('{{.Name}}')" class="text-sm text-orange-400 hover:text-orange-300 font-semibold">Add Nmap Scan</button>
+                        <button onclick="openLiveScanModal('{{.Name}}')" class="text-sm text-blue-400 hover:text-blue-300 font-semibold">Add Live Capture</button>
                         <button onclick="openDeleteModal({{.ID}}, '{{.Name}}')" class="text-sm text-red-500 hover:text-red-400 font-semibold">Delete</button>
                     </div>
                 </div>
@@ -89,11 +91,12 @@
     <div id="nmap-scan-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
         <div class="card rounded-lg shadow-xl w-full max-w-md mx-4">
             <div class="p-6">
-                <h3 class="text-xl font-bold text-white">Start Nmap Scan</h3>
+                <!-- **NEW**: Added an ID to the modal title -->
+                <h3 id="nmap-scan-modal-title" class="text-xl font-bold text-white">Start Nmap Scan</h3>
                 <div class="mt-4 space-y-4">
                     <div>
                         <label for="nmap-campaign-name" class="block text-sm font-medium text-gray-300">Campaign Name</label>
-                        <input type="text" id="nmap-campaign-name" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="Enter new or existing name">
+                        <input type="text" id="nmap-campaign-name" class="mt-1 block w-full bg-gray-800 border-gray-600 text-white rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 read-only:bg-gray-700 read-only:cursor-not-allowed" placeholder="Enter new or existing name">
                     </div>
                     <div>
                         <label for="nmap-target" class="block text-sm font-medium text-gray-300">Target</label>
@@ -155,6 +158,9 @@
         const directoryPathInput = document.getElementById('directory-path');
         const confirmFileScanBtn = document.getElementById('confirm-file-scan-btn');
         const liveScanModalTitle = document.getElementById('live-scan-modal-title');
+        // **NEW**: Get elements for the Nmap modal
+        const nmapScanModalTitle = document.getElementById('nmap-scan-modal-title');
+        const nmapCampaignNameInput = document.getElementById('nmap-campaign-name');
         
         async function openLiveScanModal(campaignName = '') {
             if (campaignName) {
@@ -207,7 +213,17 @@
             fileScanModal.classList.remove('flex');
         }
         
-        function openNmapScanModal() {
+        // **UPDATED**: Nmap modal function now accepts a campaign name
+        function openNmapScanModal(campaignName = '') {
+            if (campaignName) {
+                nmapScanModalTitle.textContent = 'Add Nmap Scan to Campaign';
+                nmapCampaignNameInput.value = campaignName;
+                nmapCampaignNameInput.readOnly = true;
+            } else {
+                nmapScanModalTitle.textContent = 'Start New Nmap Scan';
+                nmapCampaignNameInput.value = '';
+                nmapCampaignNameInput.readOnly = false;
+            }
             nmapScanModal.classList.remove('hidden');
             nmapScanModal.classList.add('flex');
         }
@@ -346,7 +362,7 @@
         const statusBanner = document.getElementById('scan-status-banner');
         const statusText = document.getElementById('scan-status-text');
         const stopScanBtn = document.getElementById('stop-scan-btn');
-        let isFinalStatusShown = false; // **FIX**: Flag to prevent timer reset
+        let isFinalStatusShown = false;
 
         async function checkScanStatus() {
             try {
@@ -354,7 +370,7 @@
                 const data = await response.json();
                 
                 if (data.isScanning) {
-                    isFinalStatusShown = false; // Reset flag when a new scan starts
+                    isFinalStatusShown = false;
                     statusText.textContent = data.status;
                     statusBanner.className = 'bg-blue-600 text-white text-center p-2 fixed top-0 w-full z-50';
                     stopScanBtn.style.display = 'inline-block';
@@ -362,7 +378,6 @@
                 } else {
                     stopScanBtn.style.display = 'none';
 
-                    // If a final status (Success/Failed) is already being shown, do nothing.
                     if (isFinalStatusShown) {
                         return;
                     }
@@ -374,7 +389,7 @@
                         statusBanner.classList.remove('hidden');
                         setTimeout(() => {
                            window.location.reload(); 
-                        }, 3000); // Reload after 3 seconds
+                        }, 3000);
                     } else if (data.status.startsWith('Failed:')) {
                         isFinalStatusShown = true;
                         statusText.textContent = data.status;
@@ -383,7 +398,7 @@
                         setTimeout(() => {
                            statusBanner.classList.add('hidden');
                            isFinalStatusShown = false;
-                        }, 10000); // Hide after 10 seconds
+                        }, 10000);
                     } else {
                         statusBanner.classList.add('hidden');
                     }
