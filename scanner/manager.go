@@ -41,7 +41,7 @@ func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, er
 	}
 
 	sm.IsScanning = true
-	sm.Status = fmt.Sprintf("Nmap scan starting on target %s...", target)
+	sm.Status = fmt.Sprintf("Scanning: Nmap scan starting on target %s...", target)
 	ctx, cancel := context.WithCancel(context.Background())
 	sm.cancelFunc = cancel
 	sm.mu.Unlock()
@@ -53,19 +53,26 @@ func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, er
 	}
 
 	go func() {
-		defer sm.resetState()
-		log.Printf("Starting nmap scan for campaign '%s' on target '%s'", campaignName, target)
-		// Corrected to handle the two return values from RunNmapScan
 		_, err := livecapture.RunNmapScan(ctx, target, campaignName)
+
+		sm.mu.Lock()
 		if err != nil {
 			log.Printf("Error during nmap scan for campaign '%s': %v", campaignName, err)
-			sm.mu.Lock()
-			sm.Status = fmt.Sprintf("Nmap scan failed: %v", err)
-			sm.mu.Unlock()
-			<-time.After(10 * time.Second)
-			return
+			sm.Status = fmt.Sprintf("Failed: Nmap scan for '%s' failed.", campaignName)
+		} else {
+			log.Printf("✅ Nmap scan finished for campaign '%s'", campaignName)
+			sm.Status = fmt.Sprintf("Success: Nmap scan for '%s' finished.", campaignName)
 		}
-		log.Printf("✅ Nmap scan finished for campaign '%s'", campaignName)
+		sm.IsScanning = false
+		sm.cancelFunc = nil
+		sm.mu.Unlock()
+
+		<-time.After(15 * time.Second)
+		sm.mu.Lock()
+		if !strings.HasPrefix(sm.Status, "Scanning:") {
+			sm.Status = "Idle"
+		}
+		sm.mu.Unlock()
 	}()
 
 	return campaignID, nil
@@ -79,7 +86,7 @@ func (sm *ScanManager) StartLiveScanTask(campaignName, interfaceName string) (in
 	}
 
 	sm.IsScanning = true
-	sm.Status = fmt.Sprintf("Live capture starting on %s...", interfaceName)
+	sm.Status = fmt.Sprintf("Scanning: Live capture starting on %s...", interfaceName)
 	ctx, cancel := context.WithCancel(context.Background())
 	sm.cancelFunc = cancel
 	sm.mu.Unlock()
@@ -91,32 +98,38 @@ func (sm *ScanManager) StartLiveScanTask(campaignName, interfaceName string) (in
 	}
 
 	go func() {
-		defer sm.resetState()
-		log.Printf("Starting background scan for campaign '%s'", campaignName)
-		sm.mu.Lock()
-		sm.Status = fmt.Sprintf("Live capture running on %s...", interfaceName)
-		sm.mu.Unlock()
-
 		masterMap := model.NewNetworkMap()
 		globalSummary := model.NewPcapSummary()
 		err := livecapture.Start(ctx, interfaceName, masterMap, globalSummary)
+
+		sm.mu.Lock()
 		if err != nil && err != context.Canceled {
 			log.Printf("Error during live capture for campaign '%s': %v", campaignName, err)
-			return
-		}
+			sm.Status = fmt.Sprintf("Failed: Live capture for '%s' failed.", campaignName)
+		} else {
+			log.Printf("Live capture finished for '%s'. Finalizing...", campaignName)
+			sm.Status = "Scanning: Finalizing data..."
+			processing.ProcessHandshakes(masterMap, globalSummary)
+			processing.EnrichWithLookups(masterMap, globalSummary)
 
-		log.Printf("Live capture finished for '%s'. Finalizing...", campaignName)
-		sm.mu.Lock()
-		sm.Status = fmt.Sprintf("Finalizing data for '%s'...", campaignName)
+			if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
+				log.Printf("Error saving results for '%s': %v", campaignName, err)
+				sm.Status = fmt.Sprintf("Failed: Could not save results for '%s'.", campaignName)
+			} else {
+				log.Printf("✅ Scan results saved for campaign '%s'.", campaignName)
+				sm.Status = fmt.Sprintf("Success: Live capture for '%s' finished.", campaignName)
+			}
+		}
+		sm.IsScanning = false
+		sm.cancelFunc = nil
 		sm.mu.Unlock()
 
-		processing.ProcessHandshakes(masterMap, globalSummary)
-		processing.EnrichWithLookups(masterMap, globalSummary)
-
-		if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
-			log.Printf("Error saving results for '%s': %v", campaignName, err)
+		<-time.After(15 * time.Second)
+		sm.mu.Lock()
+		if !strings.HasPrefix(sm.Status, "Scanning:") {
+			sm.Status = "Idle"
 		}
-		log.Printf("✅ Scan results saved for campaign '%s'.", campaignName)
+		sm.mu.Unlock()
 	}()
 
 	return campaignID, nil
@@ -130,7 +143,7 @@ func (sm *ScanManager) StartFileScanTask(campaignName, dataDir string) (int64, e
 	}
 
 	sm.IsScanning = true
-	sm.Status = fmt.Sprintf("File scan starting in directory '%s'...", dataDir)
+	sm.Status = fmt.Sprintf("Scanning: File scan starting in directory '%s'...", dataDir)
 	sm.mu.Unlock()
 
 	campaignID, err := storage.GetOrCreateCampaign(campaignName)
@@ -140,11 +153,25 @@ func (sm *ScanManager) StartFileScanTask(campaignName, dataDir string) (int64, e
 	}
 
 	go func() {
-		defer sm.resetState()
-		log.Printf("Starting file scan for campaign '%s'", campaignName)
-		if err := RunFileScan(campaignName, dataDir, campaignID); err != nil {
+		err := RunFileScan(campaignName, dataDir, campaignID)
+
+		sm.mu.Lock()
+		if err != nil {
 			log.Printf("Error during file scan task: %v", err)
+			sm.Status = fmt.Sprintf("Failed: File scan for '%s' failed.", campaignName)
+		} else {
+			sm.Status = fmt.Sprintf("Success: File scan for '%s' finished.", campaignName)
 		}
+		sm.IsScanning = false
+		sm.cancelFunc = nil
+		sm.mu.Unlock()
+
+		<-time.After(15 * time.Second)
+		sm.mu.Lock()
+		if !strings.HasPrefix(sm.Status, "Scanning:") {
+			sm.Status = "Idle"
+		}
+		sm.mu.Unlock()
 	}()
 
 	return campaignID, nil
@@ -155,6 +182,7 @@ func (sm *ScanManager) StopScan() {
 	defer sm.mu.Unlock()
 	if sm.cancelFunc != nil {
 		log.Println("Stopping active scan via API call.")
+		sm.Status = "Scanning: Stopping scan..."
 		sm.cancelFunc()
 	}
 }
@@ -175,22 +203,32 @@ func (sm *ScanManager) GetStatus() (bool, string) {
 
 // --- CLI-Driven (Synchronous) Scan Functions ---
 
-// NEW: Blocking Nmap scan function for CLI use that prints results.
 func RunNmapScanBlocking(campaignName, target string) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // **FIX 1**: Ensure context is always cancelled when the function exits.
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(c) // **FIX 2**: Stop listening for signals on this channel when the function exits.
 
 	go func() {
-		<-c
-		fmt.Println("\n🛑 Stopping Nmap scan...")
-		cancel()
+		select {
+		case <-c:
+			cancel()
+		case <-ctx.Done():
+			return // Context was cancelled elsewhere (e.g., scan finished), so exit goroutine.
+		}
 	}()
 
 	fmt.Printf("🚀 Starting Nmap scan on target '%s'. Press Ctrl+C to stop.\n", target)
 	networkMap, err := livecapture.RunNmapScan(ctx, target, campaignName)
-	if err != nil {
+	if err != nil && err != context.Canceled {
 		log.Fatalf("FATAL: Nmap scan failed: %v", err)
+	}
+
+	if err == context.Canceled {
+		fmt.Println("Scan cancelled by user.")
+		return
 	}
 
 	fmt.Println("\n--- 📡 Nmap Scan Results ---")
@@ -205,13 +243,20 @@ func RunNmapScanBlocking(campaignName, target string) {
 
 func RunLiveScanBlocking(campaignName, interfaceName string) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // **FIX 1**: Ensure context is always cancelled when the function exits.
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(c) // **FIX 2**: Stop listening for signals on this channel when the function exits.
 
 	go func() {
-		<-c
-		fmt.Println("\n🛑 Stopping capture...")
-		cancel()
+		select {
+		case <-c:
+			fmt.Println("\n🛑 Stopping capture...")
+			cancel()
+		case <-ctx.Done():
+			return // Context was cancelled elsewhere (e.g., scan finished), so exit goroutine.
+		}
 	}()
 
 	campaignID, err := storage.GetOrCreateCampaign(campaignName)
@@ -228,13 +273,15 @@ func RunLiveScanBlocking(campaignName, interfaceName string) {
 	if err != nil && err != context.Canceled {
 		log.Fatalf("FATAL: Could not start live capture: %v", err)
 	}
-	fmt.Println("✅ Capture stopped.")
+
+	if ctx.Err() == context.Canceled {
+		fmt.Println("✅ Capture stopped.")
+	}
 
 	fmt.Println("\n--- Finalizing data ---")
 	processing.ProcessHandshakes(masterMap, globalSummary)
 	processing.EnrichWithLookups(masterMap, globalSummary)
 
-	// **UPDATED**: Print all discovered hosts from the live capture.
 	if len(masterMap.Hosts) > 0 {
 		fmt.Println("\n--- 🔎 Discovered Hosts ---")
 		printHostResults(masterMap.Hosts)
@@ -321,7 +368,6 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) error {
 	return nil
 }
 
-// NEW: Helper function to print host results to the console.
 func printHostResults(hostMap map[string]*model.Host) {
 	var hosts []*model.Host
 	for _, host := range hostMap {

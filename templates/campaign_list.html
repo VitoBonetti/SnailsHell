@@ -13,7 +13,7 @@
 </head>
 <body class="font-sans">
 
-    <div id="scan-status-banner" class="hidden bg-blue-600 text-white text-center p-2 fixed top-0 w-full z-50">
+    <div id="scan-status-banner" class="hidden text-white text-center p-2 fixed top-0 w-full z-50 transition-all duration-300">
         <span id="scan-status-text"></span>
         <button id="stop-scan-btn" class="ml-4 px-3 py-1 text-xs font-semibold bg-red-500 hover:bg-red-400 rounded">Stop Scan</button>
     </div>
@@ -147,7 +147,7 @@
     <script>
         const liveScanModal = document.getElementById('live-scan-modal');
         const fileScanModal = document.getElementById('file-scan-modal');
-        const nmapScanModal = document.getElementById('nmap-scan-modal'); // NEW
+        const nmapScanModal = document.getElementById('nmap-scan-modal');
         const interfaceSelect = document.getElementById('interface-select');
         const liveCampaignNameInput = document.getElementById('live-campaign-name');
         const confirmLiveScanBtn = document.getElementById('confirm-live-scan-btn');
@@ -207,7 +207,6 @@
             fileScanModal.classList.remove('flex');
         }
         
-        // NEW: Functions for Nmap Scan Modal
         function openNmapScanModal() {
             nmapScanModal.classList.remove('hidden');
             nmapScanModal.classList.add('flex');
@@ -347,18 +346,46 @@
         const statusBanner = document.getElementById('scan-status-banner');
         const statusText = document.getElementById('scan-status-text');
         const stopScanBtn = document.getElementById('stop-scan-btn');
+        let isFinalStatusShown = false; // **FIX**: Flag to prevent timer reset
 
         async function checkScanStatus() {
             try {
                 const response = await fetch('/api/scans/status');
                 const data = await response.json();
+                
                 if (data.isScanning) {
-                    statusText.textContent = `Scan in progress: ${data.status}`;
+                    isFinalStatusShown = false; // Reset flag when a new scan starts
+                    statusText.textContent = data.status;
+                    statusBanner.className = 'bg-blue-600 text-white text-center p-2 fixed top-0 w-full z-50';
+                    stopScanBtn.style.display = 'inline-block';
                     statusBanner.classList.remove('hidden');
                 } else {
-                    if (!statusBanner.classList.contains('hidden')) {
+                    stopScanBtn.style.display = 'none';
+
+                    // If a final status (Success/Failed) is already being shown, do nothing.
+                    if (isFinalStatusShown) {
+                        return;
+                    }
+
+                    if (data.status.startsWith('Success:')) {
+                        isFinalStatusShown = true;
+                        statusText.textContent = data.status;
+                        statusBanner.className = 'bg-green-600 text-white text-center p-2 fixed top-0 w-full z-50';
+                        statusBanner.classList.remove('hidden');
+                        setTimeout(() => {
+                           window.location.reload(); 
+                        }, 3000); // Reload after 3 seconds
+                    } else if (data.status.startsWith('Failed:')) {
+                        isFinalStatusShown = true;
+                        statusText.textContent = data.status;
+                        statusBanner.className = 'bg-red-600 text-white text-center p-2 fixed top-0 w-full z-50';
+                        statusBanner.classList.remove('hidden');
+                        setTimeout(() => {
+                           statusBanner.classList.add('hidden');
+                           isFinalStatusShown = false;
+                        }, 10000); // Hide after 10 seconds
+                    } else {
                         statusBanner.classList.add('hidden');
-                        window.location.reload();
                     }
                 }
             } catch (error) {
@@ -370,16 +397,14 @@
         stopScanBtn.addEventListener('click', async () => {
              try {
                 await fetch('/api/scans/stop', { method: 'POST' });
-                alert('Scan stop request sent. The scan will stop shortly.');
              } catch(error) {
                 console.error('Error stopping scan:', error);
                 alert('Could not send stop request.');
              }
         });
 
-        // Check Nmap status on page load to enable/disable the button
         document.addEventListener('DOMContentLoaded', async () => {
-            checkScanStatus(); // Initial scan status check
+            checkScanStatus();
             const nmapBtn = document.getElementById('nmap-scan-btn');
             try {
                 const response = await fetch('/api/nmap/status');
@@ -396,7 +421,7 @@
             }
         });
 
-        setInterval(checkScanStatus, 5000);
+        setInterval(checkScanStatus, 3000);
 
     </script>
     {{ template "footer.html" . }}
