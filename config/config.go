@@ -69,14 +69,14 @@ func createDefaultConfig(path string) error {
 			UpdateAvailable bool   `yaml:"-"`
 			LatestVersion   string `yaml:"-"`
 		}{
-			Name:      "goNetMap",
+			Name:      "SnailsHell",
 			Version:   "1.0.1",
-			GithubURL: "https://github.com/VitoBonetti/goNetMap",
+			GithubURL: "https://github.com/VitoBonetti/SnailsHell",
 		},
 		Database: struct {
 			Path string `yaml:"path"`
 		}{
-			Path: "gonetmap.db",
+			Path: "snailshell.db",
 		},
 		DefaultPaths: struct {
 			DataDir string `yaml:"data_dir"`
