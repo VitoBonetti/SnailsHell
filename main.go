@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/gopacket/pcap"
 	"github.com/pkg/browser"
 )
 
@@ -46,7 +47,7 @@ func main() {
 	listCampaigns := flag.Bool("list", false, "List all existing campaigns in the terminal and exit.")
 	dataDir := flag.String("dir", config.Cfg.DefaultPaths.DataDir, "Directory for file-based scans.")
 	liveCapture := flag.Bool("live", false, "Enable live packet capture mode (requires -campaign and -iface).")
-	iface := flag.String("iface", "", "Interface for live capture (use -live without this flag to see options).")
+	iface := flag.String("iface", "", "Interface for live capture (use index number or full device name).")
 	compareFlag := flag.String("compare", "", "Compare two campaigns by name or ID, separated by a comma. e.g., 'CampaignA,CampaignB' or '1,2'")
 	nmapTarget := flag.String("nmap", "", "Run a live Nmap scan on the specified target (requires -campaign).")
 	noUI := flag.Bool("no-ui", false, "Run in CLI-only mode without starting the web server.")
@@ -74,14 +75,46 @@ func main() {
 	}
 
 	if *liveCapture {
+		devices, err := livecapture.ListInterfaces()
+		if err != nil {
+			log.Fatalf("FATAL: Could not list network interfaces: %v", err)
+		}
+
 		if *iface == "" {
-			handleListInterfacesCLI()
+			handleListInterfacesCLI(devices)
 			return
 		}
 		if *campaignName == "" {
 			log.Fatal("FATAL: A campaign name is required for a live scan (-campaign).")
 		}
-		scanner.RunLiveScanBlocking(*campaignName, *iface)
+
+		var selectedDeviceName string
+		// Try to parse the -iface argument as an integer (index)
+		ifaceIndex, err := strconv.Atoi(*iface)
+		if err == nil {
+			// It's an integer. Treat it as a 1-based index.
+			if ifaceIndex > 0 && ifaceIndex <= len(devices) {
+				selectedDeviceName = devices[ifaceIndex-1].Name
+				fmt.Printf("✅ Using interface [%d]: %s\n", ifaceIndex, devices[ifaceIndex-1].Description)
+			} else {
+				log.Fatalf("FATAL: Invalid interface index '%d'. Please choose a number between 1 and %d.", ifaceIndex, len(devices))
+			}
+		} else {
+			// It's not an integer. Treat it as a full device name.
+			selectedDeviceName = *iface
+			found := false
+			for _, d := range devices {
+				if d.Name == selectedDeviceName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				log.Fatalf("FATAL: Interface with name '%s' not found.", selectedDeviceName)
+			}
+		}
+
+		scanner.RunLiveScanBlocking(*campaignName, selectedDeviceName)
 		campaignID, _ := storage.GetOrCreateCampaign(*campaignName)
 		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS, *noUI)
 		return
@@ -92,13 +125,11 @@ func main() {
 			log.Fatal("FATAL: A campaign name is required for an Nmap scan (-campaign).")
 		}
 		scanner.RunNmapScanBlocking(*campaignName, *nmapTarget)
-		// **FIX**: Launch the UI after the scan, just like other scan types.
 		campaignID, _ := storage.GetOrCreateCampaign(*campaignName)
 		launchServerAndBrowser(fmt.Sprintf("http://localhost:8080/campaign/%d", campaignID), templatesFS, *noUI)
 		return
 	}
 
-	// This handles file-based scans (`-dir`) that are not live or nmap scans
 	if *campaignName != "" {
 		if err := scanner.RunFileScanBlocking(*campaignName, *dataDir); err != nil {
 			log.Fatalf("FATAL: File scan failed: %v", err)
@@ -145,32 +176,27 @@ func handleListCampaignsCLI() {
 	}
 }
 
-func handleListInterfacesCLI() {
-	devices, err := livecapture.ListInterfaces()
-	if err != nil {
-		log.Fatalf("FATAL: Could not list network interfaces: %v", err)
-	}
+// handleListInterfacesCLI now prints a user-friendly, indexed list.
+func handleListInterfacesCLI(devices []pcap.Interface) {
 	if len(devices) == 0 {
 		fmt.Println("No network interfaces found. Make sure you have the necessary permissions.")
 		return
 	}
 	fmt.Println("--- Available Network Interfaces ---")
-	for _, device := range devices {
-		fmt.Printf("Name: %s\n", device.Name)
-		if device.Description != "" {
-			fmt.Printf("  Description: %s\n", device.Description)
-		}
+	for i, device := range devices {
+		fmt.Printf("\n[%d] %s\n", i+1, device.Description)
 		var ipAddresses []string
 		for _, address := range device.Addresses {
 			ipAddresses = append(ipAddresses, address.IP.String())
 		}
 		if len(ipAddresses) > 0 {
-			fmt.Printf("  IP Addresses: %s\n", strings.Join(ipAddresses, ", "))
+			fmt.Printf("    IP Addresses: %s\n", strings.Join(ipAddresses, ", "))
 		}
-		fmt.Println("------------------------------------")
+		fmt.Printf("    Device Name:  %s\n", device.Name)
 	}
-	fmt.Println("\nTo start a live capture, run the command again with the -iface flag, e.g.:")
-	fmt.Printf("go run . -campaign \"Live Test\" -live -iface \"%s\"\n", devices[0].Name)
+	fmt.Println("------------------------------------")
+	fmt.Println("\nTo start a live capture, run the command again with the -iface flag, using the index number, e.g.:")
+	fmt.Println("go run . -campaign \"Live Test\" -live -iface 5")
 }
 
 func handleCompareCLI(baseIdentifier, compareIdentifier string, noUI bool) {
