@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,7 +58,7 @@ func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, er
 	go func() {
 		defer sm.resetState()
 		log.Printf("Starting nmap scan for campaign '%s' on target '%s'", campaignName, target)
-		err := livecapture.RunNmapScan(ctx, target, campaignName)
+		err := livecapture.RunNmapScan(ctx, target, campaignName) // This now correctly expects only one return value (error)
 		if err != nil {
 			log.Printf("Error during nmap scan for campaign '%s': %v", campaignName, err)
 			sm.mu.Lock()
@@ -209,6 +210,18 @@ func RunLiveScanBlocking(campaignName, interfaceName string) {
 	processing.ProcessHandshakes(masterMap, globalSummary)
 	processing.EnrichWithLookups(masterMap, globalSummary)
 
+	if len(globalSummary.CapturedHandshakes) > 0 {
+		fmt.Println("\n--- 🤝 Captured Handshakes ---")
+		for i, hs := range globalSummary.CapturedHandshakes {
+			fmt.Printf("  Handshake %d:\n", i+1)
+			fmt.Printf("    - SSID:         %s\n", hs.SSID)
+			fmt.Printf("    - AP MAC:       %s\n", hs.APMAC)
+			fmt.Printf("    - Client MAC:   %s\n", hs.ClientMAC)
+			fmt.Printf("    - State:        %s\n", hs.HandshakeState)
+			fmt.Printf("    - Pcap Source:  %s\n", hs.PcapFile)
+		}
+	}
+
 	fmt.Println("\n--- Saving results to database ---")
 	if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
 		log.Fatalf("FATAL: Could not save results to database: %v", err)
@@ -245,6 +258,53 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) error {
 	fmt.Println("\n--- Finalizing data ---")
 	processing.ProcessHandshakes(masterMap, globalSummary)
 	processing.EnrichWithLookups(masterMap, globalSummary)
+
+	nmapHosts := []*model.Host{}
+	for _, host := range masterMap.Hosts {
+		if host.DiscoveredBy == "Nmap" {
+			nmapHosts = append(nmapHosts, host)
+		}
+	}
+
+	if len(nmapHosts) > 0 {
+		fmt.Println("\n--- 📡 Nmap Scan Results ---")
+		sort.Slice(nmapHosts, func(i, j int) bool {
+			return nmapHosts[i].MACAddress < nmapHosts[j].MACAddress
+		})
+		for _, host := range nmapHosts {
+			fmt.Printf("Host: %s (%s)\n", host.MACAddress, host.Fingerprint.Vendor)
+			fmt.Printf("  - Status: %s\n", host.Status)
+			var ips []string
+			for ip := range host.IPv4Addresses {
+				ips = append(ips, ip)
+			}
+			if len(ips) > 0 {
+				fmt.Printf("  - IP Addresses: %s\n", strings.Join(ips, ", "))
+			}
+			if host.Fingerprint.OperatingSystem != "" {
+				fmt.Printf("  - OS Guess: %s\n", host.Fingerprint.OperatingSystem)
+			}
+			if len(host.Ports) > 0 {
+				fmt.Println("  - Open Ports:")
+				for _, port := range host.Ports {
+					fmt.Printf("    - %d/%s (%s): %s\n", port.ID, port.Protocol, port.State, port.Version)
+				}
+			}
+			fmt.Println("--------------------")
+		}
+	}
+
+	if len(globalSummary.CapturedHandshakes) > 0 {
+		fmt.Println("\n--- 🤝 Captured Handshakes ---")
+		for i, hs := range globalSummary.CapturedHandshakes {
+			fmt.Printf("  Handshake %d:\n", i+1)
+			fmt.Printf("    - SSID:         %s\n", hs.SSID)
+			fmt.Printf("    - AP MAC:       %s\n", hs.APMAC)
+			fmt.Printf("    - Client MAC:   %s\n", hs.ClientMAC)
+			fmt.Printf("    - State:        %s\n", hs.HandshakeState)
+			fmt.Printf("    - Pcap Source:  %s\n", hs.PcapFile)
+		}
+	}
 
 	fmt.Println("\n--- Saving results to database ---")
 	if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {

@@ -59,14 +59,9 @@ func RunNmapScan(ctx context.Context, target, campaignName string) error {
 		return fmt.Errorf("failed to close temporary file handle: %w", err)
 	}
 
-	// FIX: Build the argument list programmatically for reliability.
-	// Start with the user's configured default arguments.
+	// Build the argument list programmatically for reliability.
 	args := config.Cfg.Nmap.DefaultArgs
-
-	// Add the mandatory XML output argument. This is no longer part of the user config.
 	args = append(args, "-oX", tmpFileName)
-
-	// Finally, add the target.
 	args = append(args, target)
 
 	log.Printf("Executing nmap command: %s %v", nmapPath, args)
@@ -82,7 +77,6 @@ func RunNmapScan(ctx context.Context, target, campaignName string) error {
 
 	networkMap := model.NewNetworkMap()
 	if err := processing.MergeFromFile(tmpFileName, networkMap); err != nil {
-		// If parsing fails, include some of nmap's output for better debugging.
 		log.Printf("Nmap output for debugging:\n%s", string(output))
 		return fmt.Errorf("failed to process nmap XML output from file %s: %w", tmpFileName, err)
 	}
