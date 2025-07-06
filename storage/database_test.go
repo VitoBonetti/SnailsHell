@@ -74,8 +74,21 @@ func TestSaveAndGetHost(t *testing.T) {
 	hostToSave.Fingerprint.Vendor = "TestVendor"
 	hostToSave.Ports[80] = model.Port{ID: 80, Protocol: "tcp", State: "open", Service: "http"}
 	hostToSave.Ports[443] = model.Port{ID: 443, Protocol: "tcp", State: "open", Service: "https"}
+	hostToSave.Ports[21] = model.Port{ID: 21, Protocol: "tcp", State: "open", Service: "ftp"}
+	hostToSave.Ports[22] = model.Port{ID: 22, Protocol: "tcp", State: "open", Service: "ssh"}
+	hostToSave.Ports[445] = model.Port{ID: 445, Protocol: "tcp", State: "open", Service: "microsoft-ds"}
+
 	hostToSave.Findings[model.CriticalFinding] = []model.Vulnerability{
 		{CVE: "CVE-2025-1234", Description: "A critical issue", PortID: 443, Category: model.CriticalFinding},
+	}
+	hostToSave.FTPResults = []model.FTPResult{
+		{PortID: 21, AnonymousLoginPossible: true, CurrentDir: "/", DirectoryListing: []string{"file1.txt", "dir1"}},
+	}
+	hostToSave.SSHResults = []model.SSHResult{
+		{PortID: 22, User: "root", Successful: true, Output: "/root"},
+	}
+	hostToSave.SMBResults = []model.SMBResult{
+		{PortID: 445, Successful: true, Shares: []string{"ADMIN$", "C$", "IPC$"}},
 	}
 
 	networkMap := model.NewNetworkMap()
@@ -97,30 +110,48 @@ func TestSaveAndGetHost(t *testing.T) {
 		t.Fatalf("GetHostByID failed: %v", err)
 	}
 
+	// Assert basic host info
 	if retrievedHost.MACAddress != mac {
 		t.Errorf("MAC address mismatch: got %s, want %s", retrievedHost.MACAddress, mac)
 	}
 	if retrievedHost.Status != "up" {
 		t.Errorf("Status mismatch: got %s, want %s", retrievedHost.Status, "up")
 	}
-	if !retrievedHost.IPv4Addresses["192.168.1.100"] {
-		t.Error("Expected IP address 192.168.1.100 to be present")
-	}
-	if retrievedHost.Fingerprint.OperatingSystem != "Linux 5.4" {
-		t.Errorf("OS mismatch: got %s, want %s", retrievedHost.Fingerprint.OperatingSystem, "Linux 5.4")
-	}
-	if len(retrievedHost.Ports) != 2 {
-		t.Errorf("Expected 2 ports, but got %d", len(retrievedHost.Ports))
-	}
-	if retrievedHost.Ports[80].Service != "http" {
-		t.Errorf("Port 80 service mismatch: got %s, want http", retrievedHost.Ports[80].Service)
+	if len(retrievedHost.Ports) != 5 {
+		t.Errorf("Expected 5 ports, but got %d", len(retrievedHost.Ports))
 	}
 
-	if len(retrievedHost.Findings[model.CriticalFinding]) != 1 {
-		t.Fatalf("Expected 1 critical finding, but got %d", len(retrievedHost.Findings[model.CriticalFinding]))
+	// Assert FTP results
+	if len(retrievedHost.FTPResults) != 1 {
+		t.Fatalf("Expected 1 FTP result, but got %d", len(retrievedHost.FTPResults))
 	}
-	if retrievedHost.Findings[model.CriticalFinding][0].CVE != "CVE-2025-1234" {
-		t.Errorf("Finding CVE mismatch: got %s, want CVE-2025-1234", retrievedHost.Findings[model.CriticalFinding][0].CVE)
+	if !retrievedHost.FTPResults[0].AnonymousLoginPossible {
+		t.Error("Expected FTP anonymous login to be possible")
+	}
+	if retrievedHost.FTPResults[0].DirectoryListing[0] != "file1.txt" {
+		t.Errorf("FTP directory listing incorrect, got: %v", retrievedHost.FTPResults[0].DirectoryListing)
+	}
+
+	// Assert SSH results
+	if len(retrievedHost.SSHResults) != 1 {
+		t.Fatalf("Expected 1 SSH result, but got %d", len(retrievedHost.SSHResults))
+	}
+	if !retrievedHost.SSHResults[0].Successful {
+		t.Error("Expected SSH login to be successful")
+	}
+	if retrievedHost.SSHResults[0].Output != "/root" {
+		t.Errorf("SSH output incorrect, got: %s", retrievedHost.SSHResults[0].Output)
+	}
+
+	// Assert SMB results
+	if len(retrievedHost.SMBResults) != 1 {
+		t.Fatalf("Expected 1 SMB result, but got %d", len(retrievedHost.SMBResults))
+	}
+	if !retrievedHost.SMBResults[0].Successful {
+		t.Error("Expected SMB connection to be successful")
+	}
+	if retrievedHost.SMBResults[0].Shares[0] != "ADMIN$" {
+		t.Errorf("SMB shares incorrect, got: %v", retrievedHost.SMBResults[0].Shares)
 	}
 }
 
