@@ -25,6 +25,5 @@ builds/snailshell_v1.0.1_Linux_x86_64
 builds/snailshell_v1.0.1_Win_x86_64.exe
 snailshell.db
 .gitignore
-builds/snailshell_v1.0.2_Win_x86_64.exe
 builds/snailshell_v1.0.2_Linux_x86_64
 builds/snailshell_v1.0.2_Win_x86_64.exe
