@@ -122,14 +122,25 @@ func MergeFromXML(byteValue []byte, networkMap *model.NetworkMap) error {
 			}
 		}
 
-		if mac == "" {
-			continue // Skip hosts without a MAC address
+		// **FIX**: If there is no MAC address, but there is an IP, create a
+		// placeholder key. This handles scans of remote hosts that don't
+		// have a Layer 2 address.
+		hostKey := mac
+		if mac == "" && ip != "" {
+			hostKey = "IP:" + ip
 		}
 
-		host, found := networkMap.Hosts[mac]
+		// If there is still no key (no MAC and no IP), then we must skip it.
+		if hostKey == "" {
+			continue
+		}
+
+		host, found := networkMap.Hosts[hostKey]
 		if !found {
-			host = model.NewHost(mac)
-			networkMap.Hosts[mac] = host
+			// When creating the host, use the key as the identifier.
+			// The NewHost function will place this in the host.MACAddress field.
+			host = model.NewHost(hostKey)
+			networkMap.Hosts[hostKey] = host
 		}
 
 		host.DiscoveredBy = "Nmap"

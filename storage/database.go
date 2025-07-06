@@ -111,7 +111,7 @@ func createTables() error {
 	return nil
 }
 
-// SaveScanResults now saves all host data correctly.
+// SaveScanResults intelligently saves or merges host data into the database.
 func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *model.PcapSummary) error {
 	tx, err := DB.Begin()
 	if err != nil {
@@ -119,49 +119,27 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 	}
 	defer tx.Rollback()
 
-	hostStmt, err := tx.Prepare(`
-		INSERT INTO hosts(campaign_id, mac_address, ip_address, os_guess, vendor, status, discovered_by, device_type, behavioral_clues) 
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) 
-		ON CONFLICT(campaign_id, mac_address) DO UPDATE SET 
-		ip_address=excluded.ip_address, os_guess=excluded.os_guess, vendor=excluded.vendor, status=excluded.status, device_type=excluded.device_type, behavioral_clues=excluded.behavioral_clues;
-	`)
-	if err != nil {
-		return fmt.Errorf("could not prepare host statement: %w", err)
-	}
-	defer hostStmt.Close()
-
-	portStmt, err := tx.Prepare(`INSERT INTO ports(host_id, port_number, protocol, state, service, version) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(host_id, port_number, protocol) DO UPDATE SET state=excluded.state, service=excluded.service, version=excluded.version;`)
-	if err != nil {
-		return fmt.Errorf("could not prepare port statement: %w", err)
-	}
+	// Prepare statements for reuse
+	hostInsertStmt, _ := tx.Prepare(`INSERT INTO hosts(campaign_id, mac_address, ip_address, os_guess, vendor, status, discovered_by, device_type, behavioral_clues) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	defer hostInsertStmt.Close()
+	hostUpdateStmt, _ := tx.Prepare(`UPDATE hosts SET ip_address=?, os_guess=?, vendor=?, status=?, device_type=?, behavioral_clues=?, mac_address=? WHERE id=?`)
+	defer hostUpdateStmt.Close()
+	portStmt, _ := tx.Prepare(`INSERT INTO ports(host_id, port_number, protocol, state, service, version) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(host_id, port_number, protocol) DO UPDATE SET state=excluded.state, service=excluded.service, version=excluded.version;`)
 	defer portStmt.Close()
-
-	vulnStmt, err := tx.Prepare(`INSERT INTO vulnerabilities(host_id, port_id, cve, description, state, category) VALUES(?, ?, ?, ?, ?, ?);`)
-	if err != nil {
-		return fmt.Errorf("could not prepare vulnerability statement: %w", err)
-	}
+	vulnStmt, _ := tx.Prepare(`INSERT INTO vulnerabilities(host_id, port_id, cve, description, state, category) VALUES(?, ?, ?, ?, ?, ?);`)
 	defer vulnStmt.Close()
-
-	commStmt, err := tx.Prepare(`INSERT INTO communications(host_id, counterpart_ip, packet_count, geo_country, geo_city, geo_isp) VALUES(?, ?, ?, ?, ?, ?);`)
-	if err != nil {
-		return fmt.Errorf("could not prepare communication statement: %w", err)
-	}
+	commStmt, _ := tx.Prepare(`INSERT INTO communications(host_id, counterpart_ip, packet_count, geo_country, geo_city, geo_isp) VALUES(?, ?, ?, ?, ?, ?);`)
 	defer commStmt.Close()
-
-	dnsStmt, err := tx.Prepare(`INSERT OR IGNORE INTO dns_lookups(host_id, domain) VALUES(?, ?);`)
-	if err != nil {
-		return fmt.Errorf("could not prepare dns lookup statement: %w", err)
-	}
+	dnsStmt, _ := tx.Prepare(`INSERT OR IGNORE INTO dns_lookups(host_id, domain) VALUES(?, ?);`)
 	defer dnsStmt.Close()
-
-	handshakeStmt, err := tx.Prepare(`INSERT INTO handshakes(campaign_id, ap_mac, client_mac, ssid, state, pcap_file, hccapx_data) VALUES (?, ?, ?, ?, ?, ?, ?);`)
-	if err != nil {
-		return fmt.Errorf("could not prepare handshake statement: %w", err)
-	}
+	handshakeStmt, _ := tx.Prepare(`INSERT INTO handshakes(campaign_id, ap_mac, client_mac, ssid, state, pcap_file, hccapx_data) VALUES (?, ?, ?, ?, ?, ?, ?);`)
 	defer handshakeStmt.Close()
 
 	for _, host := range networkMap.Hosts {
+		var hostID int64
 		var mainIP, vendor, osGuess, deviceType, clues string
+
+		// Extract primary IP and fingerprint data from the host model
 		if len(host.IPv4Addresses) > 0 {
 			for ip := range host.IPv4Addresses {
 				mainIP = ip
@@ -172,7 +150,6 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 			vendor = host.Fingerprint.Vendor
 			osGuess = host.Fingerprint.OperatingSystem
 			deviceType = host.Fingerprint.DeviceType
-
 			var clueList []string
 			for clue := range host.Fingerprint.BehavioralClues {
 				clueList = append(clueList, clue)
@@ -180,18 +157,38 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 			clues = strings.Join(clueList, ", ")
 		}
 
-		res, err := hostStmt.Exec(campaignID, host.MACAddress, mainIP, osGuess, vendor, host.Status, host.DiscoveredBy, deviceType, clues)
-		if err != nil {
-			return fmt.Errorf("could not save host %s: %w", host.MACAddress, err)
+		// --- Intelligent Host Merging Logic ---
+		var existingHostID int64
+		// 1. Try to find an existing host by its MAC address.
+		err := tx.QueryRow("SELECT id FROM hosts WHERE campaign_id = ? AND mac_address = ?", campaignID, host.MACAddress).Scan(&existingHostID)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("could not query host by MAC %s: %w", host.MACAddress, err)
 		}
 
-		hostID, err := res.LastInsertId()
-		if err != nil {
-			err = tx.QueryRow("SELECT id FROM hosts WHERE campaign_id = ? AND mac_address = ?", campaignID, host.MACAddress).Scan(&hostID)
-			if err != nil {
-				return fmt.Errorf("could not get existing host ID for %s: %w", host.MACAddress, err)
+		// 2. If not found by MAC, try to find by IP address.
+		if existingHostID == 0 && mainIP != "" {
+			err = tx.QueryRow("SELECT id FROM hosts WHERE campaign_id = ? AND ip_address = ?", campaignID, mainIP).Scan(&existingHostID)
+			if err != nil && err != sql.ErrNoRows {
+				return fmt.Errorf("could not query host by IP %s: %w", mainIP, err)
 			}
 		}
+
+		if existingHostID != 0 {
+			// **UPDATE/MERGE**: We found an existing host. Update it with new info.
+			hostID = existingHostID
+			_, err = hostUpdateStmt.Exec(mainIP, osGuess, vendor, host.Status, deviceType, clues, host.MACAddress, hostID)
+			if err != nil {
+				return fmt.Errorf("could not update host %d: %w", hostID, err)
+			}
+		} else {
+			// **INSERT**: This is a new host. Insert it.
+			res, err := hostInsertStmt.Exec(campaignID, host.MACAddress, mainIP, osGuess, vendor, host.Status, host.DiscoveredBy, deviceType, clues)
+			if err != nil {
+				return fmt.Errorf("could not insert host %s: %w", host.MACAddress, err)
+			}
+			hostID, _ = res.LastInsertId()
+		}
+		// --- End of Merging Logic ---
 
 		portNumberToDBID := make(map[int]int64)
 		for _, port := range host.Ports {
@@ -200,7 +197,7 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 				return fmt.Errorf("could not save port %d for host %d: %w", port.ID, hostID, err)
 			}
 			portDBID, err := res.LastInsertId()
-			if err != nil {
+			if err != nil { // This happens on conflict/update
 				err = tx.QueryRow("SELECT id FROM ports WHERE host_id = ? AND port_number = ? AND protocol = ?", hostID, port.ID, port.Protocol).Scan(&portDBID)
 				if err != nil {
 					return fmt.Errorf("could not get existing port ID for port %d: %w", port.ID, err)
@@ -241,6 +238,7 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 			}
 		}
 	}
+
 	for _, hs := range summary.CapturedHandshakes {
 		_, err := handshakeStmt.Exec(campaignID, hs.APMAC, hs.ClientMAC, hs.SSID, hs.HandshakeState, hs.PcapFile, hs.HCCAPX)
 		if err != nil {
