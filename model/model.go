@@ -1,7 +1,9 @@
 package model
 
 import (
+	"encoding/base64"
 	"encoding/hex"
+	"time"
 
 	"github.com/google/gopacket"
 )
@@ -31,6 +33,8 @@ type Host struct {
 	DNSLookups     map[string]bool                     `json:"dns_lookups"`
 	Findings       map[FindingCategory][]Vulnerability `json:"findings"`
 	Wifi           *WifiInfo                           `json:"wifi,omitempty"`
+	WebResponses   []WebResponse                       `json:"web_responses,omitempty"`
+	Screenshots    []Screenshot                        `json:"screenshots,omitempty"`
 }
 
 // NewHost creates an initialized Host.
@@ -44,6 +48,8 @@ func NewHost(mac string) *Host {
 		DNSLookups:     make(map[string]bool),
 		Fingerprint:    &Fingerprint{BehavioralClues: make(map[string]bool)},
 		Wifi:           &WifiInfo{ProbeRequests: make(map[string]bool)},
+		WebResponses:   make([]WebResponse, 0),
+		Screenshots:    make([]Screenshot, 0),
 	}
 }
 
@@ -168,4 +174,26 @@ type Credential struct {
 	CapturedAt string
 	CampaignID int64
 	PcapFile   string
+}
+
+// WebResponse represents the response from an HTTP request.
+type WebResponse struct {
+	ID         int64
+	PortID     int
+	Method     string
+	StatusCode int
+	Headers    map[string]string
+}
+
+// Screenshot represents a captured screenshot of a web page.
+type Screenshot struct {
+	ID          int64
+	PortID      int
+	ImageData   []byte
+	CaptureTime time.Time
+}
+
+// ImageDataBase64 returns the image data as a base64 encoded string. This is useful for embedding in HTML.
+func (s *Screenshot) ImageDataBase64() string {
+	return base64.StdEncoding.EncodeToString(s.ImageData)
 }

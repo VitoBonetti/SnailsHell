@@ -16,6 +16,14 @@
         .vis-text { color: #d1d5db !important; }
         /* For no-JS fallback */
         .js-hidden { display: none; }
+        /* Carousel styles */
+        .carousel-item {
+            display: none;
+            transition: opacity 0.5s ease-in-out;
+        }
+        .carousel-item.active {
+            display: block;
+        }
     </style>
 </head>
 <body class="font-sans">
@@ -97,73 +105,36 @@
         </div>
 
         <div class="space-y-6">
-            {{if .Host.Communications}}
+            {{if .Host.Screenshots}}
             <div class="card rounded-lg p-4">
-                <div class="flex justify-between items-center mb-3">
-                    <h2 class="text-xl font-bold text-white">Communications</h2>
-                    <button id="toggle-view-btn" class="px-3 py-1 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500">Show Table</button>
-                </div>
-
-                <div id="comm-graph"></div>
-
-                <div id="comm-table-container" class="js-hidden">
-                    <div class="overflow-y-auto max-h-96">
-                        <table class="w-full text-sm text-left">
-                            <thead class="table-header sticky top-0">
-                                <tr>
-                                    <th class="p-2">Counterpart IP</th>
-                                    <th class="p-2">Packet Count</th>
-                                    <th class="p-2">Location</th>
-                                    <th class="p-2">ISP</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {{range .Host.Communications}}
-                                <tr class="table-row">
-                                    <td class="p-2 font-mono">{{.CounterpartIP}}</td>
-                                    <td class="p-2">{{.PacketCount}}</td>
-                                    <td class="p-2">
-                                        {{if .Geo}}{{if .Geo.City}}{{.Geo.City}}, {{end}}{{.Geo.Country}}{{else}}N/A{{end}}
-                                    </td>
-                                    <td class="p-2">{{if .Geo}}{{if .Geo.ISP}}{{.Geo.ISP}}{{else}}N/A{{end}}{{else}}N/A{{end}}</td>
-                                </tr>
-                                {{end}}
-                            </tbody>
-                        </table>
+                <h2 class="text-xl font-bold text-white mb-3">Web Screenshots</h2>
+                <div class="relative">
+                    <div id="screenshot-carousel" class="relative h-96 overflow-hidden rounded-lg">
+                        {{range $i, $screenshot := .Host.Screenshots}}
+                        <div class="carousel-item {{if eq $i 0}}active{{end}}">
+                            <a href="/api/screenshot/{{$screenshot.ID}}" target="_blank" rel="noopener noreferrer" title="Click to open full image in new tab">
+                                <img src="/api/screenshot/{{$screenshot.ID}}" alt="Screenshot of port {{$screenshot.PortID}}" class="w-full h-full object-contain cursor-pointer">
+                            </a>
+                        </div>
+                        {{end}}
                     </div>
+                    <button id="prev-btn" class="absolute top-1/2 left-0 transform -translate-y-1/2 bg-gray-800/50 hover:bg-gray-800/75 p-2 rounded-full">
+                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                    </button>
+                    <button id="next-btn" class="absolute top-1/2 right-0 transform -translate-y-1/2 bg-gray-800/50 hover:bg-gray-800/75 p-2 rounded-full">
+                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                    </button>
                 </div>
             </div>
             {{end}}
 
-            {{if .Host.Findings}}
-            <div class="card rounded-lg p-4">
-                <h2 class="text-xl font-bold text-white mb-3">Vulnerabilities & Findings</h2>
-                <div class="overflow-y-auto max-h-96 space-y-4">
-                    {{range $category, $findings := .Host.Findings}}
-                    <div>
-                        <h3 class="font-semibold text-lg {{if eq $category "Critical"}}text-red-400{{else if eq $category "Potential"}}text-yellow-400{{else}}text-blue-400{{end}}">{{$category}} Findings</h3>
-                        <ul class="list-disc list-inside mt-2 space-y-1">
-                            {{range $findings}}
-                            <li>
-                                <span class="font-bold">{{.CVE}}</span>
-                                {{if .PortID}}(Port {{.PortID}}){{end}}:
-                                <span class="text-gray-300">{{.Description}}</span>
-                            </li>
-                            {{end}}
-                        </ul>
-                    </div>
-                    {{end}}
-                </div>
             </div>
-            {{end}}
-        </div>
     </div>
 
     <noscript>
         <style>
-            /* If JS is disabled, hide the graph container and show the table */
             #comm-graph { display: none; }
-            #toggle-view-btn { display: none; } /* Hide the button as it's useless */
+            #toggle-view-btn { display: none; }
             .js-hidden { display: block !important; }
         </style>
     </noscript>
@@ -175,12 +146,10 @@
             const toggleBtn = document.getElementById('toggle-view-btn');
             let isGraphView = true;
 
-            // With JS, hide the table and show the graph by default
             tableContainer.style.display = 'none';
             graphContainer.style.display = 'block';
 
             if (graphContainer) {
-                // Fetch data and render the graph
                 fetch('/api/campaign/{{.CampaignID}}/hosts/{{.Host.ID}}/communications')
                     .then(response => response.json())
                     .then(data => {
@@ -226,6 +195,29 @@
                     toggleBtn.textContent = 'Show Graph';
                 }
             });
+
+            // Carousel logic
+            const carousel = document.getElementById('screenshot-carousel');
+            if (carousel) {
+                const items = carousel.querySelectorAll('.carousel-item');
+                let currentIndex = 0;
+
+                const showItem = (index) => {
+                    items.forEach((item, i) => {
+                        item.classList.toggle('active', i === index);
+                    });
+                };
+
+                document.getElementById('prev-btn').addEventListener('click', () => {
+                    currentIndex = (currentIndex - 1 + items.length) % items.length;
+                    showItem(currentIndex);
+                });
+
+                document.getElementById('next-btn').addEventListener('click', () => {
+                    currentIndex = (currentIndex + 1) % items.length;
+                    showItem(currentIndex);
+                });
+            }
         });
     </script>
     {{ template "footer.html" . }}

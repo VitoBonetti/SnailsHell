@@ -60,7 +60,7 @@ func Start(embeddedTemplates embed.FS) {
 		campaignRoutes.GET("/", handleDashboard)
 		campaignRoutes.GET("/hosts/:id", handleHostDetail)
 		campaignRoutes.GET("/handshakes", handleHandshakes)
-		campaignRoutes.GET("/credentials", handleCredentialsPage) // New route
+		campaignRoutes.GET("/credentials", handleCredentialsPage)
 		campaignRoutes.GET("/report/zip", handleReportDownload)
 	}
 
@@ -71,6 +71,9 @@ func Start(embeddedTemplates embed.FS) {
 		api.DELETE("/campaigns/:campaignID", handleDeleteCampaign)
 		api.POST("/compare", handleCompareCampaigns)
 		api.GET("/nmap/status", handleGetNmapStatus)
+
+		// New endpoint to serve screenshots
+		api.GET("/screenshot/:id", handleGetScreenshot)
 
 		scansAPI := api.Group("/scans")
 		{
@@ -437,4 +440,21 @@ func handleCompareCampaigns(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// handleGetScreenshot serves a single screenshot image from the database.
+func handleGetScreenshot(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.String(http.StatusBadRequest, "Invalid screenshot ID.")
+		return
+	}
+
+	imageData, err := storage.GetScreenshotByID(id)
+	if err != nil {
+		c.String(http.StatusNotFound, "Screenshot not found.")
+		return
+	}
+
+	c.Data(http.StatusOK, "image/png", imageData)
 }

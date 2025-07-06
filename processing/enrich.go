@@ -5,18 +5,27 @@ import (
 	"SnailsHell/model"
 	"fmt"
 	"log"
+	"time"
 )
 
 // EnrichWithLookups performs GeoIP and MAC vendor lookups.
 func EnrichWithLookups(networkMap *model.NetworkMap, summary *model.PcapSummary) {
 	fmt.Println("--- Performing Geolocation Lookups ---")
 	geoCache := make(map[string]*model.GeoInfo)
+	// Create a rate limiter: 40 requests per minute = 1 request every 1.5 seconds
+	rateLimiter := time.NewTicker(1500 * time.Millisecond)
+	defer rateLimiter.Stop()
+
 	for _, host := range networkMap.Hosts {
 		for _, comm := range host.Communications {
 			if geoInfo, found := geoCache[comm.CounterpartIP]; found {
 				comm.Geo = geoInfo
 				continue
 			}
+
+			// Wait for the rate limiter
+			<-rateLimiter.C
+
 			geoInfo, err := lookups.LookupIP(comm.CounterpartIP)
 			if err != nil {
 				log.Printf("Could not get geo info for %s: %v", comm.CounterpartIP, err)

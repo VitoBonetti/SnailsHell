@@ -5,6 +5,7 @@ import (
 	"SnailsHell/model"
 	"SnailsHell/processing"
 	"SnailsHell/storage"
+	"SnailsHell/webenum"
 	"context"
 	"fmt"
 	"log"
@@ -338,6 +339,13 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) error {
 	fmt.Println("\n--- Finalizing data ---")
 	processing.ProcessHandshakes(masterMap, globalSummary)
 	processing.EnrichWithLookups(masterMap, globalSummary)
+
+	// After processing files, probe web servers
+	fmt.Println("\n--- Probing discovered web servers ---")
+	for _, host := range masterMap.Hosts {
+		webenum.ProbeWebServer(host)
+		webenum.TakeScreenshot(host)
+	}
 
 	nmapHosts := make(map[string]*model.Host)
 	for key, host := range masterMap.Hosts {

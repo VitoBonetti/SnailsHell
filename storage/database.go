@@ -4,6 +4,7 @@ import (
 	"SnailsHell/model"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -114,6 +115,25 @@ func createTables() error {
 		FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
 		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE
 	);
+	CREATE TABLE IF NOT EXISTS web_responses (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		host_id INTEGER NOT NULL,
+		port_id INTEGER NOT NULL,
+		method TEXT NOT NULL,
+		status_code INTEGER,
+		headers TEXT,
+		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
+		FOREIGN KEY(port_id) REFERENCES ports(id) ON DELETE CASCADE
+	);
+	CREATE TABLE IF NOT EXISTS screenshots (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		host_id INTEGER NOT NULL,
+		port_id INTEGER NOT NULL,
+		image_data BLOB,
+		capture_time DATETIME,
+		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
+		FOREIGN KEY(port_id) REFERENCES ports(id) ON DELETE CASCADE
+	);
 	`
 	if _, err := DB.Exec(schema); err != nil {
 		return fmt.Errorf("could not create database schema: %w", err)
@@ -147,6 +167,10 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 	defer handshakeStmt.Close()
 	credentialStmt, _ := tx.Prepare(`INSERT INTO credentials(campaign_id, host_id, endpoint, type, value, pcap_file) VALUES (?, ?, ?, ?, ?, ?);`)
 	defer credentialStmt.Close()
+	webResponseStmt, _ := tx.Prepare(`INSERT INTO web_responses(host_id, port_id, method, status_code, headers) VALUES (?, ?, ?, ?, ?);`)
+	defer webResponseStmt.Close()
+	screenshotStmt, _ := tx.Prepare(`INSERT INTO screenshots(host_id, port_id, image_data, capture_time) VALUES (?, ?, ?, ?);`)
+	defer screenshotStmt.Close()
 
 	for _, host := range networkMap.Hosts {
 		var hostID int64
@@ -251,6 +275,27 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 				return fmt.Errorf("could not save DNS lookup for host %d: %w", hostID, err)
 			}
 		}
+		for _, webResponse := range host.WebResponses {
+			portDBID, ok := portNumberToDBID[webResponse.PortID]
+			if !ok {
+				continue
+			}
+			headersJSON, _ := json.Marshal(webResponse.Headers)
+			_, err := webResponseStmt.Exec(hostID, portDBID, webResponse.Method, webResponse.StatusCode, string(headersJSON))
+			if err != nil {
+				return fmt.Errorf("could not save web response for host %d: %w", hostID, err)
+			}
+		}
+		for _, screenshot := range host.Screenshots {
+			portDBID, ok := portNumberToDBID[screenshot.PortID]
+			if !ok {
+				continue
+			}
+			_, err := screenshotStmt.Exec(hostID, portDBID, screenshot.ImageData, screenshot.CaptureTime)
+			if err != nil {
+				return fmt.Errorf("could not save screenshot for host %d: %w", hostID, err)
+			}
+		}
 	}
 
 	for _, hs := range summary.CapturedHandshakes {
@@ -261,13 +306,9 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 	}
 
 	for _, cred := range summary.Credentials {
-		// Find the host ID for the credential
 		var hostID int64
 		err := tx.QueryRow("SELECT id FROM hosts WHERE campaign_id = ? AND mac_address = ?", campaignID, cred.HostMAC).Scan(&hostID)
 		if err != nil {
-			// If host not found, we can't save the credential.
-			// This might happen if the host was filtered out or not processed.
-			// For now, we'll log it and continue.
 			fmt.Printf("Warning: Could not find host with MAC %s for credential, skipping.\n", cred.HostMAC)
 			continue
 		}
@@ -456,9 +497,40 @@ func GetHostByID(hostID int64, campaignID int64) (*model.Host, error) {
 		host.DNSLookups[domain] = true
 	}
 
+	webRows, err := DB.Query("SELECT p.port_number, wr.method, wr.status_code, wr.headers FROM web_responses wr JOIN ports p ON wr.port_id = p.id WHERE wr.host_id = ?", hostID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query web responses for host %d: %w", hostID, err)
+	}
+	defer webRows.Close()
+	for webRows.Next() {
+		var wr model.WebResponse
+		var headersJSON string
+		if err := webRows.Scan(&wr.PortID, &wr.Method, &wr.StatusCode, &headersJSON); err != nil {
+			return nil, fmt.Errorf("could not scan web response row for host %d: %w", hostID, err)
+		}
+		if err := json.Unmarshal([]byte(headersJSON), &wr.Headers); err != nil {
+			return nil, fmt.Errorf("could not unmarshal web response headers for host %d: %w", hostID, err)
+		}
+		host.WebResponses = append(host.WebResponses, wr)
+	}
+
+	screenshotRows, err := DB.Query("SELECT s.id, p.port_number, s.image_data, s.capture_time FROM screenshots s JOIN ports p ON s.port_id = p.id WHERE s.host_id = ?", hostID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query screenshots for host %d: %w", hostID, err)
+	}
+	defer screenshotRows.Close()
+	for screenshotRows.Next() {
+		var s model.Screenshot
+		if err := screenshotRows.Scan(&s.ID, &s.PortID, &s.ImageData, &s.CaptureTime); err != nil {
+			return nil, fmt.Errorf("could not scan screenshot row for host %d: %w", hostID, err)
+		}
+		host.Screenshots = append(host.Screenshots, s)
+	}
+
 	return host, nil
 }
 
+// ... (rest of the file is the same as the previous step)
 func GetCampaignByID(id int64) (*CampaignInfo, error) {
 	var c CampaignInfo
 	err := DB.QueryRow("SELECT id, name, created_at FROM campaigns WHERE id = ?", id).Scan(&c.ID, &c.Name, &c.CreatedAt)
@@ -858,4 +930,17 @@ func CountCredentialsByCampaign(campaignID int64) (int, error) {
 		return 0, fmt.Errorf("could not count credentials for campaign %d: %w", campaignID, err)
 	}
 	return count, err
+}
+
+// GetScreenshotByID retrieves the raw image data for a single screenshot.
+func GetScreenshotByID(id int64) ([]byte, error) {
+	var data []byte
+	err := DB.QueryRow("SELECT image_data FROM screenshots WHERE id = ?", id).Scan(&data)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("screenshot with ID %d not found", id)
+		}
+		return nil, err
+	}
+	return data, nil
 }

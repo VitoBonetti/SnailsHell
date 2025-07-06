@@ -5,6 +5,7 @@ import (
 	"SnailsHell/model"
 	"SnailsHell/processing"
 	"SnailsHell/storage"
+	"SnailsHell/webenum"
 	"bufio"
 	"context"
 	"fmt"
@@ -74,7 +75,6 @@ func RunNmapScan(ctx context.Context, target, campaignName string) (*model.Netwo
 	}
 
 	args := config.Cfg.Nmap.DefaultArgs
-	// Add the --stats-every flag for periodic updates and the -v flag for verbosity
 	args = append(args, "--stats-every", "5s", "-v")
 	args = append(args, "-oX", tmpFileName)
 	args = append(args, target)
@@ -82,7 +82,6 @@ func RunNmapScan(ctx context.Context, target, campaignName string) (*model.Netwo
 	log.Printf("Executing nmap command: %s %v", nmapPath, args)
 	cmd := exec.CommandContext(ctx, nmapPath, args...)
 
-	// Get pipes to read stdout and stderr in real-time
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 
@@ -90,13 +89,11 @@ func RunNmapScan(ctx context.Context, target, campaignName string) (*model.Netwo
 		return nil, fmt.Errorf("failed to start nmap command: %w", err)
 	}
 
-	// Use a regular expression to find progress percentages in Nmap's output
 	re := regexp.MustCompile(`\s(\d+\.\d+)% done`)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		// Combine stdout and stderr to parse progress from either stream
 		merged := io.MultiReader(stdout, stderr)
 		scanner := bufio.NewScanner(merged)
 		for scanner.Scan() {
@@ -110,8 +107,8 @@ func RunNmapScan(ctx context.Context, target, campaignName string) (*model.Netwo
 	}()
 
 	err = cmd.Wait()
-	wg.Wait()     // Ensure the scanner goroutine has finished reading
-	fmt.Println() // Print a newline to move past the progress bar
+	wg.Wait()
+	fmt.Println()
 
 	if err != nil {
 		return nil, fmt.Errorf("nmap command failed: %w", err)
@@ -122,6 +119,13 @@ func RunNmapScan(ctx context.Context, target, campaignName string) (*model.Netwo
 	networkMap := model.NewNetworkMap()
 	if err := processing.MergeFromFile(tmpFileName, networkMap); err != nil {
 		return nil, fmt.Errorf("failed to process nmap XML output from file %s: %w", tmpFileName, err)
+	}
+
+	// Probe web servers found by Nmap
+	log.Println("Probing discovered web servers...")
+	for _, host := range networkMap.Hosts {
+		webenum.ProbeWebServer(host)
+		webenum.TakeScreenshot(host)
 	}
 
 	summary := model.NewPcapSummary()
