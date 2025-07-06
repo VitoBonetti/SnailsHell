@@ -1,52 +1,78 @@
 package lookups
 
 import (
-	"bufio"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
-	"strings"
+
+	"github.com/klauspost/oui"
 )
 
-var ouiData = make(map[string]string)
+// db will hold the loaded OUI database in memory.
+var db oui.OuiDB
 
-// InitMac loads the OUI database from the embedded file.
+// The official source URL for the OUI database file.
+const ouiURL = "http://standards-oui.ieee.org/oui.txt"
+
+// InitMac loads the OUI database, downloading it if it's missing.
+// This replaces the previous InitMac function.
 func InitMac() error {
-	file, err := os.Open("oui.txt")
-	if err != nil {
-		return fmt.Errorf("could not open oui.txt: %w", err)
-	}
-	defer file.Close()
+	const filename = "oui.txt"
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, "(hex)") {
-			parts := strings.SplitN(line, "(hex)", 2)
-			if len(parts) == 2 {
-				prefix := strings.TrimSpace(parts[0])
-				prefix = strings.ReplaceAll(prefix, "-", ":")
-				vendor := strings.TrimSpace(parts[1])
-				ouiData[prefix] = vendor
-			}
+	// Check if the database file already exists.
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		fmt.Printf("OUI database (%s) not found. Downloading latest version...\n", filename)
+		if err := downloadFile(filename, ouiURL); err != nil {
+			return fmt.Errorf("could not download OUI database: %w", err)
 		}
+		fmt.Println("✅ OUI database downloaded successfully.")
 	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading oui.txt: %w", err)
+	// Now that we know the file exists, open it.
+	var err error
+	db, err = oui.OpenFile(filename)
+	if err != nil {
+		return fmt.Errorf("failed to open OUI database file '%s': %w", filename, err)
 	}
+
 	fmt.Println("✅ OUI database loaded successfully for local MAC lookups.")
 	return nil
 }
 
-// LookupVendor finds the vendor for a given MAC address.
+// downloadFile is a helper function to download a file from a URL.
+func downloadFile(filepath string, url string) error {
+	// Get the data
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Create the file
+	out, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	// Write the body to file
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+// LookupVendor performs a fast, local lookup for the vendor of a given MAC address.
 func LookupVendor(mac string) (string, error) {
-	if len(mac) < 8 {
-		return "Unknown Vendor", fmt.Errorf("invalid MAC address format")
+	if db == nil {
+		return "Unknown Vendor", fmt.Errorf("OUI database not initialized")
 	}
-	prefix := strings.ToUpper(mac[:8])
-	vendor, found := ouiData[prefix]
-	if !found {
-		return "Unknown Vendor", fmt.Errorf("vendor not found for prefix %s", prefix)
+
+	entry, err := db.Query(mac)
+	if err != nil {
+		// This error means the prefix was not found, which is a normal case.
+		return "Unknown Vendor", err
 	}
-	return vendor, nil
+
+	// The library returns a detailed entry; we just want the company name.
+	return entry.Manufacturer, nil
 }

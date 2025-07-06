@@ -3,51 +3,44 @@ package lookups
 import (
 	"os"
 	"testing"
+
+	"github.com/klauspost/oui"
 )
 
 // TestLookupVendor is a unit test for the LookupVendor function.
 func TestLookupVendor(t *testing.T) {
 	// --- Test Setup ---
-	// This setup is designed to be safe and work across different OSes.
-	// It temporarily replaces the real oui.txt with a small, controlled version for testing.
+	// The new maclookup implementation uses a real parsing library,
+	// which is stricter about the file format. This test data
+	// is a minimal but valid OUI file format that the library can parse.
+	testOuiData := `
+00-50-C2   (hex)		VMware, Inc.
+0050C2     (base 16)		VMware, Inc.
 
-	testOuiData := `00-50-C2 (hex)		VMware, Inc.
-8C-EA-B4 (hex)		Apple, Inc.`
-	testFilePath := "oui.txt"
+8C-EA-B4   (hex)		Apple, Inc.
+8CEAB4     (base 16)		Apple, Inc.
+`
+	// Create a temporary file for the test.
+	// t.TempDir() automatically creates a temporary directory that is cleaned up
+	// after the test, which is safer and cleaner.
+	tempDir := t.TempDir()
+	testFilePath := tempDir + "/oui.txt"
 
-	// 1. Backup the original oui.txt if it exists.
-	originalData, err := os.ReadFile(testFilePath)
-	originalExists := !os.IsNotExist(err)
-	if err != nil && originalExists {
-		t.Fatalf("Failed to read original oui.txt for backup: %v", err)
-	}
-
-	// 2. Write the temporary test data to oui.txt.
 	if err := os.WriteFile(testFilePath, []byte(testOuiData), 0644); err != nil {
 		t.Fatalf("Failed to write temporary oui.txt: %v", err)
 	}
 
-	// 3. Defer the cleanup logic to run after the test finishes.
-	defer func() {
-		// Restore the original oui.txt if it was backed up.
-		if originalExists {
-			if err := os.WriteFile(testFilePath, originalData, 0644); err != nil {
-				t.Fatalf("Failed to restore original oui.txt: %v", err)
-			}
-		} else {
-			// If it didn't exist before, remove the test file.
-			os.Remove(testFilePath)
-		}
-	}()
-
-	// 4. Initialize the MAC lookup service with our test data.
-	if err := InitMac(); err != nil {
-		t.Fatalf("InitMac() failed: %v", err)
+	// --- Test Initialization ---
+	// We need to temporarily replace the global 'db' with a new one
+	// loaded from our test file.
+	var err error
+	db, err = oui.OpenFile(testFilePath) // Use the library's OpenFile directly
+	if err != nil {
+		t.Fatalf("Failed to open test OUI database: %v", err)
 	}
 
 	// --- Test Cases ---
 
-	// t.Run allows grouping tests and gives clearer output on failure.
 	t.Run("KnownVendor_Apple", func(t *testing.T) {
 		mac := "8C:EA:B4:12:34:56"
 		expectedVendor := "Apple, Inc."
@@ -76,6 +69,7 @@ func TestLookupVendor(t *testing.T) {
 		mac := "00:11:22:33:44:55"
 		expectedVendor := "Unknown Vendor"
 		vendor, err := LookupVendor(mac)
+		// We expect an error when the vendor is not found.
 		if err == nil {
 			t.Errorf("LookupVendor for %s was expected to fail, but it succeeded.", mac)
 		}
