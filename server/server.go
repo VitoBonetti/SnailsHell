@@ -17,7 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// NEW: Helper function to get base data for all templates
+// getBaseTemplateData returns a gin.H with common data for all templates.
 func getBaseTemplateData() gin.H {
 	return gin.H{
 		"App": config.Cfg.Application,
@@ -60,6 +60,7 @@ func Start(embeddedTemplates embed.FS) {
 		campaignRoutes.GET("/", handleDashboard)
 		campaignRoutes.GET("/hosts/:id", handleHostDetail)
 		campaignRoutes.GET("/handshakes", handleHandshakes)
+		campaignRoutes.GET("/credentials", handleCredentialsPage) // New route
 		campaignRoutes.GET("/report/zip", handleReportDownload)
 	}
 
@@ -69,13 +70,13 @@ func Start(embeddedTemplates embed.FS) {
 		api.GET("/interfaces", handleGetInterfaces)
 		api.DELETE("/campaigns/:campaignID", handleDeleteCampaign)
 		api.POST("/compare", handleCompareCampaigns)
-		api.GET("/nmap/status", handleGetNmapStatus) // NEW
+		api.GET("/nmap/status", handleGetNmapStatus)
 
 		scansAPI := api.Group("/scans")
 		{
 			scansAPI.POST("/live/start", handleStartLiveScan)
 			scansAPI.POST("/file/start", handleStartFileScan)
-			scansAPI.POST("/nmap/start", handleStartNmapScan) // NEW
+			scansAPI.POST("/nmap/start", handleStartNmapScan)
 			scansAPI.GET("/status", handleGetScanStatus)
 			scansAPI.POST("/stop", handleStopScan)
 		}
@@ -202,6 +203,26 @@ func handleHandshakes(c *gin.Context) {
 	data["CurrentPage"] = page
 
 	c.HTML(http.StatusOK, "handshakes.html", data)
+}
+
+func handleCredentialsPage(c *gin.Context) {
+	campaignID, _ := strconv.ParseInt(c.Param("campaignID"), 10, 64)
+	campaign, err := storage.GetCampaignByID(campaignID)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Could not load campaign details.")
+		return
+	}
+	credentials, err := storage.GetCredentialsByCampaign(campaignID)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Could not load credentials.")
+		return
+	}
+
+	data := getBaseTemplateData()
+	data["Campaign"] = campaign
+	data["Credentials"] = credentials
+
+	c.HTML(http.StatusOK, "credentials.html", data)
 }
 
 func handleReportDownload(c *gin.Context) {

@@ -3,14 +3,21 @@ package processing
 import (
 	"SnailsHell/model"
 	"net"
+	"regexp"
 	"strings"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
 
+var (
+	// Regex for finding API keys (prefixed with "apikey", "key", "token", etc.)
+	apiKeyRegex = regexp.MustCompile(`(?i)(apikey|key|token|secret|password)[\s="':]+([a-zA-Z0-9\-_]{20,})`)
+	// Regex for finding Bearer tokens
+	bearerTokenRegex = regexp.MustCompile(`(?i)Authorization: Bearer ([a-zA-Z0-9\-_.]+)`)
+)
+
 // ProcessPacket contains the core logic for analyzing a single packet.
-// This version is corrected to process EAPOL handshakes before IP-based traffic.
 func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary *model.PcapSummary, sourceName string) {
 	summary.TotalPackets++
 
@@ -19,13 +26,10 @@ func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary
 	}
 
 	// --- EAPOL Handshake Processing (Layer 2) ---
-	// This must happen BEFORE the IP address check, as handshake packets don't have IP addresses.
 	if eapolLayer := packet.Layer(layers.LayerTypeEAPOL); eapolLayer != nil {
 		sessionKey := getSessionKey(packet)
 		if sessionKey != "" {
-			// Track the packet as part of a potential handshake session
 			summary.EapolTracker[sessionKey] = append(summary.EapolTracker[sessionKey], packet)
-			// Keep track of which pcap file the packet came from
 			summary.PacketSources[packet] = sourceName
 		}
 	}
@@ -35,7 +39,6 @@ func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary
 	if dot11Layer != nil {
 		dot11, _ := dot11Layer.(*layers.Dot11)
 		var mgmtPayload []byte
-		// Extract SSIDs from various management frames
 		if beaconLayer := packet.Layer(layers.LayerTypeDot11MgmtBeacon); beaconLayer != nil {
 			mgmtPayload = beaconLayer.LayerPayload()
 			ssid := getSSIDFromPayload(mgmtPayload)
@@ -64,28 +67,24 @@ func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary
 
 	var srcMAC, dstMAC, srcIP, dstIP string
 
-	// Get MAC addresses from Ethernet layer
 	if ethLayer := packet.Layer(layers.LayerTypeEthernet); ethLayer != nil {
 		eth, _ := ethLayer.(*layers.Ethernet)
 		srcMAC = eth.SrcMAC.String()
 		dstMAC = eth.DstMAC.String()
 	}
 
-	// Get MAC addresses from 802.11 data frames that contain IP packets
 	if dot11Layer != nil && (packet.Layer(layers.LayerTypeIPv4) != nil || packet.Layer(layers.LayerTypeIPv6) != nil) {
 		dot11, _ := dot11Layer.(*layers.Dot11)
-		// Determine MACs based on data flow direction (To/From Distribution System)
 		switch {
 		case dot11.Flags.ToDS() && !dot11.Flags.FromDS():
-			srcMAC = dot11.Address2.String() // Station MAC
-			dstMAC = dot11.Address1.String() // AP MAC
+			srcMAC = dot11.Address2.String()
+			dstMAC = dot11.Address1.String()
 		case !dot11.Flags.ToDS() && dot11.Flags.FromDS():
-			srcMAC = dot11.Address1.String() // AP MAC
-			dstMAC = dot11.Address2.String() // Station MAC
+			srcMAC = dot11.Address1.String()
+			dstMAC = dot11.Address2.String()
 		}
 	}
 
-	// Get IP addresses
 	if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
 		ip, _ := ipLayer.(*layers.IPv4)
 		srcIP = ip.SrcIP.String()
@@ -96,7 +95,6 @@ func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary
 		dstIP = ip.DstIP.String()
 	}
 
-	// If there is no IP traffic, we can't do host discovery, so we stop here.
 	if srcIP == "" || dstIP == "" {
 		return
 	}
@@ -104,12 +102,10 @@ func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary
 	srcIsLocal := isPrivateIP(net.ParseIP(srcIP))
 	dstIsLocal := isPrivateIP(net.ParseIP(dstIP))
 
-	// Skip packets between two public IPs
 	if !srcIsLocal && !dstIsLocal {
 		return
 	}
 
-	// Identify which MAC/IP is local vs remote
 	var localMAC, localIP, remoteIP string
 	if srcIsLocal {
 		localMAC, localIP, remoteIP = srcMAC, srcIP, dstIP
@@ -118,10 +114,9 @@ func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary
 	}
 
 	if localMAC == "" {
-		return // Cannot create a host without a MAC address
+		return
 	}
 
-	// Update the network map with the discovered host
 	host, found := networkMap.Hosts[strings.ToUpper(localMAC)]
 	if !found {
 		host = model.NewHost(strings.ToUpper(localMAC))
@@ -130,24 +125,60 @@ func ProcessPacket(packet gopacket.Packet, networkMap *model.NetworkMap, summary
 	}
 	host.IPv4Addresses[localIP] = true
 
-	// Track communication partners
 	if _, ok := host.Communications[remoteIP]; !ok {
 		host.Communications[remoteIP] = &model.Communication{CounterpartIP: remoteIP}
 	}
 	host.Communications[remoteIP].PacketCount++
 
-	// Track DNS lookups
 	if dnsLayer := packet.Layer(layers.LayerTypeDNS); dnsLayer != nil {
 		dns, _ := dnsLayer.(*layers.DNS)
-		if dns.QR == false { // This is a query
+		if dns.QR == false {
 			for _, q := range dns.Questions {
 				host.DNSLookups[string(q.Name)] = true
 			}
 		}
 	}
+
+	// Check for secrets in the application layer payload
+	if appLayer := packet.ApplicationLayer(); appLayer != nil {
+		checkForSecrets(appLayer.Payload(), host.MACAddress, remoteIP, summary, sourceName)
+	}
 }
 
-// getSSIDFromPayload extracts the SSID from an 802.11 management frame's payload.
+func checkForSecrets(payload []byte, hostMAC, remoteIP string, summary *model.PcapSummary, pcapFile string) {
+	payloadStr := string(payload)
+
+	// Check for API keys
+	matches := apiKeyRegex.FindAllStringSubmatch(payloadStr, -1)
+	for _, match := range matches {
+		if len(match) > 2 {
+			cred := model.Credential{
+				HostMAC:  hostMAC,
+				Endpoint: remoteIP,
+				Type:     "API Key/Token",
+				Value:    match[2],
+				PcapFile: pcapFile,
+			}
+			summary.Credentials = append(summary.Credentials, cred)
+		}
+	}
+
+	// Check for Bearer tokens
+	matches = bearerTokenRegex.FindAllStringSubmatch(payloadStr, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			cred := model.Credential{
+				HostMAC:  hostMAC,
+				Endpoint: remoteIP,
+				Type:     "Bearer Token",
+				Value:    match[1],
+				PcapFile: pcapFile,
+			}
+			summary.Credentials = append(summary.Credentials, cred)
+		}
+	}
+}
+
 func getSSIDFromPayload(payload []byte) string {
 	for len(payload) >= 2 {
 		id := layers.Dot11InformationElementID(payload[0])
@@ -166,13 +197,11 @@ func getSSIDFromPayload(payload []byte) string {
 	return ""
 }
 
-// getSessionKey creates a unique key for a handshake session based on the two MAC addresses involved.
 func getSessionKey(packet gopacket.Packet) string {
 	if dot11Layer := packet.Layer(layers.LayerTypeDot11); dot11Layer != nil {
 		dot11, _ := dot11Layer.(*layers.Dot11)
 		addr1 := dot11.Address1.String()
 		addr2 := dot11.Address2.String()
-		// Sort the MACs alphabetically to ensure the key is consistent regardless of packet direction
 		if strings.Compare(addr1, addr2) < 0 {
 			return addr1 + "-" + addr2
 		}
@@ -181,7 +210,6 @@ func getSessionKey(packet gopacket.Packet) string {
 	return ""
 }
 
-// isPrivateIP checks if an IP address is within the private address ranges.
 func isPrivateIP(ip net.IP) bool {
 	if ip == nil {
 		return false

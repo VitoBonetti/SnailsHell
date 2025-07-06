@@ -40,11 +40,10 @@ func NewHost(mac string) *Host {
 		IPv4Addresses:  make(map[string]bool),
 		Ports:          make(map[int]Port),
 		Communications: make(map[string]*Communication),
-		// FIX: Remove the unnecessary 'model.' prefix.
-		Findings:    make(map[FindingCategory][]Vulnerability),
-		DNSLookups:  make(map[string]bool),
-		Fingerprint: &Fingerprint{BehavioralClues: make(map[string]bool)},
-		Wifi:        &WifiInfo{ProbeRequests: make(map[string]bool)},
+		Findings:       make(map[FindingCategory][]Vulnerability),
+		DNSLookups:     make(map[string]bool),
+		Fingerprint:    &Fingerprint{BehavioralClues: make(map[string]bool)},
+		Wifi:           &WifiInfo{ProbeRequests: make(map[string]bool)},
 	}
 }
 
@@ -114,6 +113,7 @@ type PcapSummary struct {
 	AllProbeRequests   map[string]map[string]bool
 	UnidentifiedMACs   map[string]string
 	CapturedHandshakes []Handshake
+	Credentials        []Credential
 	EapolTracker       map[string][]gopacket.Packet `json:"-"`
 	PacketSources      map[gopacket.Packet]string   `json:"-"`
 }
@@ -126,6 +126,7 @@ func NewPcapSummary() *PcapSummary {
 		AllProbeRequests:   make(map[string]map[string]bool),
 		UnidentifiedMACs:   make(map[string]string),
 		CapturedHandshakes: []Handshake{},
+		Credentials:        []Credential{},
 		EapolTracker:       make(map[string][]gopacket.Packet),
 		PacketSources:      make(map[gopacket.Packet]string),
 	}
@@ -154,4 +155,17 @@ type ReportHandshakeInfo struct {
 	SSID      string
 	PcapFile  string
 	HCCAPX    string // The hex-encoded data for display
+}
+
+// Credential represents a secret found in traffic.
+type Credential struct {
+	ID         int64
+	HostID     int64
+	HostMAC    string
+	Endpoint   string
+	Type       string
+	Value      string
+	CapturedAt string
+	CampaignID int64
+	PcapFile   string
 }

@@ -103,6 +103,17 @@ func createTables() error {
 		hccapx_data BLOB,
 		FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
 	);
+	CREATE TABLE IF NOT EXISTS credentials (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		campaign_id INTEGER NOT NULL,
+		host_id INTEGER NOT NULL,
+		endpoint TEXT,
+		type TEXT,
+		value TEXT,
+		pcap_file TEXT,
+		FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+		FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE
+	);
 	`
 	if _, err := DB.Exec(schema); err != nil {
 		return fmt.Errorf("could not create database schema: %w", err)
@@ -134,6 +145,8 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 	defer dnsStmt.Close()
 	handshakeStmt, _ := tx.Prepare(`INSERT INTO handshakes(campaign_id, ap_mac, client_mac, ssid, state, pcap_file, hccapx_data) VALUES (?, ?, ?, ?, ?, ?, ?);`)
 	defer handshakeStmt.Close()
+	credentialStmt, _ := tx.Prepare(`INSERT INTO credentials(campaign_id, host_id, endpoint, type, value, pcap_file) VALUES (?, ?, ?, ?, ?, ?);`)
+	defer credentialStmt.Close()
 
 	for _, host := range networkMap.Hosts {
 		var hostID int64
@@ -189,6 +202,7 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 			hostID, _ = res.LastInsertId()
 		}
 		// --- End of Merging Logic ---
+		host.ID = hostID
 
 		portNumberToDBID := make(map[int]int64)
 		for _, port := range host.Ports {
@@ -246,9 +260,25 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 		}
 	}
 
+	for _, cred := range summary.Credentials {
+		// Find the host ID for the credential
+		var hostID int64
+		err := tx.QueryRow("SELECT id FROM hosts WHERE campaign_id = ? AND mac_address = ?", campaignID, cred.HostMAC).Scan(&hostID)
+		if err != nil {
+			// If host not found, we can't save the credential.
+			// This might happen if the host was filtered out or not processed.
+			// For now, we'll log it and continue.
+			fmt.Printf("Warning: Could not find host with MAC %s for credential, skipping.\n", cred.HostMAC)
+			continue
+		}
+		_, err = credentialStmt.Exec(campaignID, hostID, cred.Endpoint, cred.Type, cred.Value, cred.PcapFile)
+		if err != nil {
+			return fmt.Errorf("could not save credential: %w", err)
+		}
+	}
+
 	return tx.Commit()
 }
-
 func GetOrCreateCampaign(name string) (int64, error) {
 	var campaignID int64
 	err := DB.QueryRow("SELECT id FROM campaigns WHERE name = ?", name).Scan(&campaignID)
@@ -731,6 +761,7 @@ type DashboardSummary struct {
 	PotentialVulnCount        int
 	InformationalVulnCount    int
 	CapturedHandshakesCount   int
+	CapturedCredentialsCount  int
 	TotalVulnerabilitiesCount int
 }
 
@@ -789,5 +820,42 @@ func GetDashboardSummary(campaignID int64) (*DashboardSummary, error) {
 		return nil, fmt.Errorf("could not count handshakes for dashboard: %w", err)
 	}
 
+	err = DB.QueryRow("SELECT COUNT(*) FROM credentials WHERE campaign_id = ?", campaignID).Scan(&summary.CapturedCredentialsCount)
+	if err != nil {
+		return nil, fmt.Errorf("could not count credentials for dashboard: %w", err)
+	}
+
 	return summary, nil
+}
+
+func GetCredentialsByCampaign(campaignID int64) ([]model.Credential, error) {
+	rows, err := DB.Query(`
+		SELECT c.id, c.endpoint, c.type, c.value, c.pcap_file, h.mac_address
+		FROM credentials c
+		JOIN hosts h ON c.host_id = h.id
+		WHERE c.campaign_id = ?
+		ORDER BY c.id DESC`, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query credentials for campaign %d: %w", campaignID, err)
+	}
+	defer rows.Close()
+
+	var credentials []model.Credential
+	for rows.Next() {
+		var c model.Credential
+		if err := rows.Scan(&c.ID, &c.Endpoint, &c.Type, &c.Value, &c.PcapFile, &c.HostMAC); err != nil {
+			return nil, fmt.Errorf("could not scan credential row: %w", err)
+		}
+		credentials = append(credentials, c)
+	}
+	return credentials, nil
+}
+
+func CountCredentialsByCampaign(campaignID int64) (int, error) {
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM credentials WHERE campaign_id = ?", campaignID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("could not count credentials for campaign %d: %w", campaignID, err)
+	}
+	return count, err
 }
