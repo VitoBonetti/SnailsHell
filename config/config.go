@@ -70,7 +70,7 @@ func createDefaultConfig(path string) error {
 			LatestVersion   string `yaml:"-"`
 		}{
 			Name:      "goNetMap",
-			Version:   "1.0.0",
+			Version:   "1.0.1",
 			GithubURL: "https://github.com/VitoBonetti/goNetMap",
 		},
 		Database: struct {
