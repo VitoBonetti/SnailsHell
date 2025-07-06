@@ -117,11 +117,59 @@ var allMigrations = []Migration{
             );
         `,
 	},
-	// Future migrations would be added here, e.g.:
-	// {
-	//     Version: 3,
-	//     Script: `ALTER TABLE hosts ADD COLUMN notes TEXT;`,
-	// },
+	{
+		Version: 3,
+		Script: `
+            CREATE TABLE IF NOT EXISTS ftp_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                host_id INTEGER NOT NULL,
+                port_id INTEGER NOT NULL,
+                address TEXT,
+                status TEXT,
+                error TEXT,
+                anonymous_login_possible BOOLEAN,
+                current_dir TEXT,
+                directory_listing TEXT,
+                FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
+                FOREIGN KEY(port_id) REFERENCES ports(id) ON DELETE CASCADE
+            );
+        `,
+	},
+	{
+		Version: 4,
+		Script: `
+            CREATE TABLE IF NOT EXISTS ssh_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                host_id INTEGER NOT NULL,
+                port_id INTEGER NOT NULL,
+                address TEXT,
+                user TEXT,
+                status TEXT,
+                error TEXT,
+                successful BOOLEAN,
+                output TEXT,
+                FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
+                FOREIGN KEY(port_id) REFERENCES ports(id) ON DELETE CASCADE
+            );
+        `,
+	},
+	{
+		Version: 5,
+		Script: `
+            CREATE TABLE IF NOT EXISTS smb_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                host_id INTEGER NOT NULL,
+                port_id INTEGER NOT NULL,
+                address TEXT,
+                status TEXT,
+                error TEXT,
+                successful BOOLEAN,
+                shares TEXT,
+                FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE,
+                FOREIGN KEY(port_id) REFERENCES ports(id) ON DELETE CASCADE
+            );
+        `,
+	},
 }
 
 // GetMigrations returns the list of all defined migrations.

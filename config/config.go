@@ -7,6 +7,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// SSHCredentials holds a username and password for SSH.
+type SSHCredentials struct {
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+}
+
 // Config holds all the configuration for the application.
 type Config struct {
 	Application struct {
@@ -31,6 +37,9 @@ type Config struct {
 		Path        string   `yaml:"path"`
 		DefaultArgs []string `yaml:"default_args"`
 	} `yaml:"nmap"`
+	Credentials struct {
+		SSH []SSHCredentials `yaml:"ssh"`
+	} `yaml:"credentials"`
 }
 
 // Cfg is a global variable that will hold the loaded configuration.
@@ -55,6 +64,14 @@ func LoadConfig() error {
 		return fmt.Errorf("could not parse config file %s: %w", configPath, err)
 	}
 
+	// Ensure default credentials are set if the section is missing
+	if Cfg.Credentials.SSH == nil {
+		Cfg.Credentials.SSH = []SSHCredentials{
+			{User: "root", Password: "root"},
+			{User: "root", Password: ""},
+		}
+	}
+
 	fmt.Println("✅ Configuration loaded from config.yaml.")
 	return nil
 }
@@ -70,7 +87,7 @@ func createDefaultConfig(path string) error {
 			LatestVersion   string `yaml:"-"`
 		}{
 			Name:      "SnailsHell",
-			Version:   "1.1.0",
+			Version:   "1.2.0",
 			GithubURL: "https://github.com/VitoBonetti/SnailsHell",
 		},
 		Database: struct {
@@ -98,6 +115,14 @@ func createDefaultConfig(path string) error {
 		}{
 			Path:        "",
 			DefaultArgs: []string{"-Pn", "-O", "-sV", "--script", "vuln"},
+		},
+		Credentials: struct {
+			SSH []SSHCredentials `yaml:"ssh"`
+		}{
+			SSH: []SSHCredentials{
+				{User: "root", Password: "root"},
+				{User: "root", Password: ""},
+			},
 		},
 	}
 

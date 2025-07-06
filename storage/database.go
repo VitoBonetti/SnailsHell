@@ -18,7 +18,7 @@ import (
 var DB *sql.DB
 
 // LatestSchemaVersion defines the most recent schema version this application supports.
-const LatestSchemaVersion = 2
+const LatestSchemaVersion = 5
 
 // InitDB initializes the database connection and runs schema migrations.
 func InitDB(filepath string) error {
@@ -136,6 +136,12 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 	defer webResponseStmt.Close()
 	screenshotStmt, _ := tx.Prepare(`INSERT INTO screenshots(host_id, port_id, image_data, capture_time) VALUES (?, ?, ?, ?);`)
 	defer screenshotStmt.Close()
+	ftpResultStmt, _ := tx.Prepare(`INSERT INTO ftp_results(host_id, port_id, address, status, error, anonymous_login_possible, current_dir, directory_listing) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`)
+	defer ftpResultStmt.Close()
+	sshResultStmt, _ := tx.Prepare(`INSERT INTO ssh_results(host_id, port_id, address, user, status, error, successful, output) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`)
+	defer sshResultStmt.Close()
+	smbResultStmt, _ := tx.Prepare(`INSERT INTO smb_results(host_id, port_id, address, status, error, successful, shares) VALUES (?, ?, ?, ?, ?, ?, ?);`)
+	defer smbResultStmt.Close()
 
 	for _, host := range networkMap.Hosts {
 		var hostID int64
@@ -259,6 +265,38 @@ func SaveScanResults(campaignID int64, networkMap *model.NetworkMap, summary *mo
 			_, err := screenshotStmt.Exec(hostID, portDBID, screenshot.ImageData, screenshot.CaptureTime)
 			if err != nil {
 				return fmt.Errorf("could not save screenshot for host %d: %w", hostID, err)
+			}
+		}
+		for _, ftpResult := range host.FTPResults {
+			portDBID, ok := portNumberToDBID[ftpResult.PortID]
+			if !ok {
+				continue
+			}
+			dirListing := strings.Join(ftpResult.DirectoryListing, "\n")
+			_, err := ftpResultStmt.Exec(hostID, portDBID, ftpResult.Address, ftpResult.Status, ftpResult.Error, ftpResult.AnonymousLoginPossible, ftpResult.CurrentDir, dirListing)
+			if err != nil {
+				return fmt.Errorf("could not save ftp result for host %d: %w", hostID, err)
+			}
+		}
+		for _, sshResult := range host.SSHResults {
+			portDBID, ok := portNumberToDBID[sshResult.PortID]
+			if !ok {
+				continue
+			}
+			_, err := sshResultStmt.Exec(hostID, portDBID, sshResult.Address, sshResult.User, sshResult.Status, sshResult.Error, sshResult.Successful, sshResult.Output)
+			if err != nil {
+				return fmt.Errorf("could not save ssh result for host %d: %w", hostID, err)
+			}
+		}
+		for _, smbResult := range host.SMBResults {
+			portDBID, ok := portNumberToDBID[smbResult.PortID]
+			if !ok {
+				continue
+			}
+			shares := strings.Join(smbResult.Shares, "\n")
+			_, err := smbResultStmt.Exec(hostID, portDBID, smbResult.Address, smbResult.Status, smbResult.Error, smbResult.Successful, shares)
+			if err != nil {
+				return fmt.Errorf("could not save smb result for host %d: %w", hostID, err)
 			}
 		}
 	}
@@ -492,6 +530,64 @@ func GetHostByID(hostID int64, campaignID int64) (*model.Host, error) {
 			return nil, fmt.Errorf("could not scan screenshot row for host %d: %w", hostID, err)
 		}
 		host.Screenshots = append(host.Screenshots, s)
+	}
+
+	ftpRows, err := DB.Query(`
+        SELECT fr.id, p.port_number, fr.address, fr.status, fr.error, fr.anonymous_login_possible, fr.current_dir, fr.directory_listing
+        FROM ftp_results fr
+        JOIN ports p ON fr.port_id = p.id
+        WHERE fr.host_id = ?`, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query ftp results for host %d: %w", hostID, err)
+	}
+	defer ftpRows.Close()
+
+	for ftpRows.Next() {
+		var fr model.FTPResult
+		var dirListing string
+		if err := ftpRows.Scan(&fr.ID, &fr.PortID, &fr.Address, &fr.Status, &fr.Error, &fr.AnonymousLoginPossible, &fr.CurrentDir, &dirListing); err != nil {
+			return nil, fmt.Errorf("could not scan ftp result row for host %d: %w", hostID, err)
+		}
+		fr.DirectoryListing = strings.Split(dirListing, "\n")
+		host.FTPResults = append(host.FTPResults, fr)
+	}
+
+	sshRows, err := DB.Query(`
+		SELECT sr.id, p.port_number, sr.address, sr.user, sr.status, sr.error, sr.successful, sr.output
+		FROM ssh_results sr
+		JOIN ports p ON sr.port_id = p.id
+		WHERE sr.host_id = ?`, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query ssh results for host %d: %w", hostID, err)
+	}
+	defer sshRows.Close()
+
+	for sshRows.Next() {
+		var sr model.SSHResult
+		if err := sshRows.Scan(&sr.ID, &sr.PortID, &sr.Address, &sr.User, &sr.Status, &sr.Error, &sr.Successful, &sr.Output); err != nil {
+			return nil, fmt.Errorf("could not scan ssh result row for host %d: %w", hostID, err)
+		}
+		host.SSHResults = append(host.SSHResults, sr)
+	}
+
+	smbRows, err := DB.Query(`
+		SELECT smr.id, p.port_number, smr.address, smr.status, smr.error, smr.successful, smr.shares
+		FROM smb_results smr
+		JOIN ports p ON smr.port_id = p.id
+		WHERE smr.host_id = ?`, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("could not query smb results for host %d: %w", hostID, err)
+	}
+	defer smbRows.Close()
+
+	for smbRows.Next() {
+		var smr model.SMBResult
+		var shares string
+		if err := smbRows.Scan(&smr.ID, &smr.PortID, &smr.Address, &smr.Status, &smr.Error, &smr.Successful, &shares); err != nil {
+			return nil, fmt.Errorf("could not scan smb result row for host %d: %w", hostID, err)
+		}
+		smr.Shares = strings.Split(shares, "\n")
+		host.SMBResults = append(host.SMBResults, smr)
 	}
 
 	return host, nil

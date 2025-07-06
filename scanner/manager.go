@@ -3,6 +3,7 @@ package scanner
 import (
 	"SnailsHell/livecapture"
 	"SnailsHell/model"
+	"SnailsHell/postexploitation"
 	"SnailsHell/processing"
 	"SnailsHell/storage"
 	"SnailsHell/webenum"
@@ -54,7 +55,7 @@ func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, er
 	}
 
 	go func() {
-		_, err := livecapture.RunNmapScan(ctx, target, campaignName)
+		networkMap, err := livecapture.RunNmapScan(ctx, target, campaignName)
 
 		sm.mu.Lock()
 		if err != nil {
@@ -62,13 +63,27 @@ func (sm *ScanManager) StartNmapScanTask(target, campaignName string) (int64, er
 			sm.Status = fmt.Sprintf("Failed: Nmap scan for '%s' failed.", campaignName)
 		} else {
 			log.Printf("✅ Nmap scan finished for campaign '%s'", campaignName)
-			sm.Status = fmt.Sprintf("Success: Nmap scan for '%s' finished.", campaignName)
+			sm.Status = "Scanning: Running post-exploitation checks..."
+
+			for _, host := range networkMap.Hosts {
+				postexploitation.CheckFTPAnonymousLogin(host)
+				postexploitation.CheckSSHLogin(host)
+				postexploitation.CheckSMBUnauthenticatedAccess(host)
+			}
+
+			sm.Status = "Scanning: Saving results..."
+			if err := storage.SaveScanResults(campaignID, networkMap, &model.PcapSummary{}); err != nil {
+				log.Printf("Error saving results for '%s': %v", campaignName, err)
+				sm.Status = fmt.Sprintf("Failed: Could not save results for '%s'.", campaignName)
+			} else {
+				log.Printf("✅ Scan results saved for campaign '%s'.", campaignName)
+				sm.Status = fmt.Sprintf("Success: Nmap scan for '%s' finished.", campaignName)
+			}
 		}
 		sm.IsScanning = false
 		sm.cancelFunc = nil
 		sm.mu.Unlock()
 
-		// **FIX**: Shorten the time the final status is held to prevent UI race conditions.
 		<-time.After(5 * time.Second)
 		sm.mu.Lock()
 		if !strings.HasPrefix(sm.Status, "Scanning:") {
@@ -114,6 +129,14 @@ func (sm *ScanManager) StartLiveScanTask(campaignName, interfaceName string) (in
 			processing.ProcessHandshakes(masterMap, globalSummary)
 			processing.EnrichWithLookups(masterMap, globalSummary)
 
+			sm.Status = "Scanning: Running post-exploitation checks..."
+			for _, host := range masterMap.Hosts {
+				postexploitation.CheckFTPAnonymousLogin(host)
+				postexploitation.CheckSSHLogin(host)
+				postexploitation.CheckSMBUnauthenticatedAccess(host)
+			}
+
+			sm.Status = "Scanning: Saving results..."
 			if err := storage.SaveScanResults(campaignID, masterMap, globalSummary); err != nil {
 				log.Printf("Error saving results for '%s': %v", campaignName, err)
 				sm.Status = fmt.Sprintf("Failed: Could not save results for '%s'.", campaignName)
@@ -126,7 +149,6 @@ func (sm *ScanManager) StartLiveScanTask(campaignName, interfaceName string) (in
 		sm.cancelFunc = nil
 		sm.mu.Unlock()
 
-		// **FIX**: Shorten the time the final status is held.
 		<-time.After(5 * time.Second)
 		sm.mu.Lock()
 		if !strings.HasPrefix(sm.Status, "Scanning:") {
@@ -169,7 +191,6 @@ func (sm *ScanManager) StartFileScanTask(campaignName, dataDir string) (int64, e
 		sm.cancelFunc = nil
 		sm.mu.Unlock()
 
-		// **FIX**: Shorten the time the final status is held.
 		<-time.After(5 * time.Second)
 		sm.mu.Lock()
 		if !strings.HasPrefix(sm.Status, "Scanning:") {
@@ -242,6 +263,14 @@ func RunNmapScanBlocking(campaignName, target string) {
 	}
 
 	printHostResults(networkMap.Hosts)
+
+	fmt.Println("\n--- 🕵️ Post-Exploitation Checks ---")
+	for _, host := range networkMap.Hosts {
+		postexploitation.CheckFTPAnonymousLogin(host)
+		postexploitation.CheckSSHLogin(host)
+		postexploitation.CheckSMBUnauthenticatedAccess(host)
+	}
+
 	fmt.Println("✅ Nmap scan results processed and saved.")
 }
 
@@ -285,6 +314,13 @@ func RunLiveScanBlocking(campaignName, interfaceName string) {
 	fmt.Println("\n--- Finalizing data ---")
 	processing.ProcessHandshakes(masterMap, globalSummary)
 	processing.EnrichWithLookups(masterMap, globalSummary)
+
+	fmt.Println("\n--- 🕵️ Post-Exploitation Checks ---")
+	for _, host := range masterMap.Hosts {
+		postexploitation.CheckFTPAnonymousLogin(host)
+		postexploitation.CheckSSHLogin(host)
+		postexploitation.CheckSMBUnauthenticatedAccess(host)
+	}
 
 	if len(masterMap.Hosts) > 0 {
 		fmt.Println("\n--- 🔎 Discovered Hosts ---")
@@ -345,6 +381,13 @@ func RunFileScan(campaignName, dataDir string, campaignID int64) error {
 	for _, host := range masterMap.Hosts {
 		webenum.ProbeWebServer(host)
 		webenum.TakeScreenshot(host)
+	}
+
+	fmt.Println("\n--- 🕵️ Post-Exploitation Checks ---")
+	for _, host := range masterMap.Hosts {
+		postexploitation.CheckFTPAnonymousLogin(host)
+		postexploitation.CheckSSHLogin(host)
+		postexploitation.CheckSMBUnauthenticatedAccess(host)
 	}
 
 	nmapHosts := make(map[string]*model.Host)

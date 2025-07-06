@@ -14,16 +14,9 @@
         .table-row { border-color: #374151; }
         #comm-graph { height: 400px; background-color: #1f2937; border-radius: 0.5rem; }
         .vis-text { color: #d1d5db !important; }
-        /* For no-JS fallback */
         .js-hidden { display: none; }
-        /* Carousel styles */
-        .carousel-item {
-            display: none;
-            transition: opacity 0.5s ease-in-out;
-        }
-        .carousel-item.active {
-            display: block;
-        }
+        .carousel-item { display: none; transition: opacity 0.5s ease-in-out; }
+        .carousel-item.active { display: block; }
     </style>
 </head>
 <body class="font-sans">
@@ -42,22 +35,10 @@
                 <div class="card rounded-lg p-4">
                     <h2 class="text-xl font-bold text-white mb-3">Host Information</h2>
                     <div class="space-y-2 text-sm">
-                        <div class="flex justify-between">
-                            <span class="font-semibold text-gray-400">Status:</span>
-                            <span class="font-mono {{if eq .Host.Status "up"}}text-green-400{{else}}text-red-400{{end}}">{{ upper .Host.Status }}</span>
-                        </div>
-                        <div class="flex justify-between">
-                            <span class="font-semibold text-gray-400">Vendor:</span>
-                            <span class="text-right">{{ default "N/A" .Host.Fingerprint.Vendor }}</span>
-                        </div>
-                        <div class="flex justify-between">
-                            <span class="font-semibold text-gray-400">OS Guess:</span>
-                            <span class="text-right">{{ default "N/A" .Host.Fingerprint.OperatingSystem }}</span>
-                        </div>
-                        <div class="flex justify-between">
-                            <span class="font-semibold text-gray-400">Device Type:</span>
-                            <span class="text-right">{{ default "N/A" .Host.Fingerprint.DeviceType }}</span>
-                        </div>
+                        <div class="flex justify-between"><span class="font-semibold text-gray-400">Status:</span><span class="font-mono {{if eq .Host.Status "up"}}text-green-400{{else}}text-red-400{{end}}">{{ upper .Host.Status }}</span></div>
+                        <div class="flex justify-between"><span class="font-semibold text-gray-400">Vendor:</span><span class="text-right">{{ default "N/A" .Host.Fingerprint.Vendor }}</span></div>
+                        <div class="flex justify-between"><span class="font-semibold text-gray-400">OS Guess:</span><span class="text-right">{{ default "N/A" .Host.Fingerprint.OperatingSystem }}</span></div>
+                        <div class="flex justify-between"><span class="font-semibold text-gray-400">Device Type:</span><span class="text-right">{{ default "N/A" .Host.Fingerprint.DeviceType }}</span></div>
                     </div>
                 </div>
 
@@ -105,6 +86,66 @@
         </div>
 
         <div class="space-y-6">
+            {{if .Host.Findings}}
+            <div class="card rounded-lg p-4">
+                <h2 class="text-xl font-bold text-white mb-3">Vulnerabilities</h2>
+                <div class="overflow-y-auto max-h-96">
+                    <table class="w-full text-sm text-left">
+                        <thead class="table-header sticky top-0">
+                            <tr>
+                                <th class="p-2">CVE / ID</th>
+                                <th class="p-2">Category</th>
+                                <th class="p-2">Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range $cat, $vulns := .Host.Findings}}
+                                {{range $vulns}}
+                                <tr class="table-row">
+                                    <td class="p-2 font-mono">{{.CVE}}</td>
+                                    <td class="p-2 font-mono">{{.Category}}</td>
+                                    <td class="p-2 text-xs">{{.Description}}</td>
+                                </tr>
+                                {{end}}
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {{end}}
+
+            {{if .Host.Communications}}
+            <div class="card rounded-lg p-4">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="text-xl font-bold text-white">Communications</h2>
+                    <button id="toggle-view-btn" class="px-3 py-1 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-md">Show Table</button>
+                </div>
+                <div id="comm-graph"></div>
+                <div id="comm-table-container" class="js-hidden overflow-y-auto max-h-96">
+                    <table class="w-full text-sm text-left">
+                        <thead class="table-header sticky top-0">
+                            <tr>
+                                <th class="p-2">Remote IP</th>
+                                <th class="p-2">Packet Count</th>
+                                <th class="p-2">Location</th>
+                                <th class="p-2">ISP</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .Host.Communications}}
+                            <tr class="table-row">
+                                <td class="p-2 font-mono">{{.CounterpartIP}}</td>
+                                <td class="p-2 font-mono">{{.PacketCount}}</td>
+                                <td class="p-2 font-mono">{{if .Geo}}{{if .Geo.City}}{{.Geo.City}}, {{end}}{{.Geo.Country}}{{else}}N/A{{end}}</td>
+                                <td class="p-2 font-mono">{{if .Geo}}{{.Geo.ISP}}{{else}}N/A{{end}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {{end}}
+
             {{if .Host.Screenshots}}
             <div class="card rounded-lg p-4">
                 <h2 class="text-xl font-bold text-white mb-3">Web Screenshots</h2>
@@ -128,13 +169,58 @@
             </div>
             {{end}}
 
+            {{if or .Host.FTPResults .Host.SSHResults .Host.SMBResults}}
+            <div class="card rounded-lg p-4">
+                <h2 class="text-xl font-bold text-white mb-3">Post-Exploitation Scan Results</h2>
+                <div class="space-y-4">
+                    {{range .Host.FTPResults}}
+                    <div class="border-t border-gray-600 pt-4">
+                        <p class="font-semibold text-lg text-indigo-300">FTP (Port {{.PortID}})</p>
+                        <div class="space-y-2 text-sm mt-2">
+                            <div class="flex justify-between"><span class="font-semibold text-gray-400">Status:</span>
+                                {{if .AnonymousLoginPossible}}<span class="font-mono text-green-400">Anonymous Login Succeeded</span>{{else}}<span class="font-mono text-red-400">Anonymous Login Failed</span>{{end}}
+                            </div>
+                            {{if .CurrentDir}}<div class="flex justify-between"><span class="font-semibold text-gray-400">Directory:</span><span class="font-mono">{{.CurrentDir}}</span></div>{{end}}
+                            {{if .DirectoryListing}}<div><p class="font-semibold text-gray-400">Listing:</p><pre class="bg-gray-800 p-2 rounded mt-1 text-xs whitespace-pre-wrap">{{range .DirectoryListing}}{{.}}{{"\n"}}{{end}}</pre></div>{{end}}
+                            {{if .Error}}<div><p class="font-semibold text-gray-400">Error:</p><p class="font-mono text-red-400 text-xs">{{.Error}}</p></div>{{end}}
+                        </div>
+                    </div>
+                    {{end}}
+                    {{range .Host.SSHResults}}
+                     <div class="border-t border-gray-600 pt-4">
+                        <p class="font-semibold text-lg text-teal-300">SSH (Port {{.PortID}} as '{{.User}}')</p>
+                        <div class="space-y-2 text-sm mt-2">
+                            <div class="flex justify-between"><span class="font-semibold text-gray-400">Status:</span>
+                                {{if .Successful}}<span class="font-mono text-green-400">Login Succeeded</span>{{else}}<span class="font-mono text-red-400">Login Failed</span>{{end}}
+                            </div>
+                            {{if .Output}}<div><p class="font-semibold text-gray-400">PWD Output:</p><pre class="bg-gray-800 p-2 rounded mt-1 text-xs whitespace-pre-wrap">{{.Output}}</pre></div>{{end}}
+                            {{if .Error}}<div><p class="font-semibold text-gray-400">Error:</p><p class="font-mono text-red-400 text-xs">{{.Error}}</p></div>{{end}}
+                        </div>
+                    </div>
+                    {{end}}
+                    {{range .Host.SMBResults}}
+                     <div class="border-t border-gray-600 pt-4">
+                        <p class="font-semibold text-lg text-sky-300">SMB (Port {{.PortID}})</p>
+                        <div class="space-y-2 text-sm mt-2">
+                            <div class="flex justify-between"><span class="font-semibold text-gray-400">Status:</span>
+                                {{if .Successful}}<span class="font-mono text-green-400">Unauthenticated Access Succeeded</span>{{else}}<span class="font-mono text-red-400">Unauthenticated Access Failed</span>{{end}}
+                            </div>
+                            {{if .Shares}}<div><p class="font-semibold text-gray-400">Shares:</p><pre class="bg-gray-800 p-2 rounded mt-1 text-xs whitespace-pre-wrap">{{range .Shares}}{{.}}{{"\n"}}{{end}}</pre></div>{{end}}
+                            {{if .Error}}<div><p class="font-semibold text-gray-400">Error:</p><p class="font-mono text-red-400 text-xs">{{.Error}}</p></div>{{end}}
+                        </div>
+                    </div>
+                    {{end}}
+                </div>
             </div>
+            {{end}}
+
+        </div>
     </div>
 
     <noscript>
         <style>
-            #comm-graph { display: none; }
-            #toggle-view-btn { display: none; }
+            #comm-graph { display: none !important; }
+            #toggle-view-btn { display: none !important; }
             .js-hidden { display: block !important; }
         </style>
     </noscript>
@@ -144,12 +230,19 @@
             const graphContainer = document.getElementById('comm-graph');
             const tableContainer = document.getElementById('comm-table-container');
             const toggleBtn = document.getElementById('toggle-view-btn');
+            const commsDataPresent = {{if .Host.Communications}}true{{else}}false{{end}};
             let isGraphView = true;
 
-            tableContainer.style.display = 'none';
-            graphContainer.style.display = 'block';
-
-            if (graphContainer) {
+            // Hide toggle button if no data
+            if (!commsDataPresent) {
+                if (toggleBtn) toggleBtn.style.display = 'none';
+            } else {
+                tableContainer.style.display = 'none';
+                graphContainer.style.display = 'block';
+            }
+            
+            // Init vis.js graph
+            if (graphContainer && commsDataPresent) {
                 fetch('/api/campaign/{{.CampaignID}}/hosts/{{.Host.ID}}/communications')
                     .then(response => response.json())
                     .then(data => {
@@ -158,21 +251,9 @@
                         const graphData = { nodes: nodes, edges: edges };
                         const options = {
                             layout: { hierarchical: false },
-                            edges: {
-                                color: { color: "#6b7280", highlight: "#9ca3af" },
-                                smooth: { enabled: true, type: "dynamic" }
-                            },
-                            nodes: {
-                                shape: 'box',
-                                color: {
-                                    border: '#60a5fa', background: '#374151',
-                                    highlight: { border: '#93c5fd', background: '#4b5563' }
-                                },
-                                font: { color: '#e5e7eb', size: 14 }
-                            },
-                            physics: {
-                                barnesHut: { gravitationalConstant: -8000, springLength: 95, springConstant: 0.04 }
-                            },
+                            edges: { color: { color: "#6b7280", highlight: "#9ca3af" }, smooth: { enabled: true, type: "dynamic" } },
+                            nodes: { shape: 'box', color: { border: '#60a5fa', background: '#374151', highlight: { border: '#93c5fd', background: '#4b5563' } }, font: { color: '#e5e7eb', size: 14 } },
+                            physics: { barnesHut: { gravitationalConstant: -8000, springLength: 95, springConstant: 0.04 } },
                             interaction: { hover: true }
                         };
                         new vis.Network(graphContainer, graphData, options);
@@ -183,40 +264,40 @@
                     });
             }
 
-            toggleBtn.addEventListener('click', () => {
-                isGraphView = !isGraphView;
-                if (isGraphView) {
-                    graphContainer.style.display = 'block';
-                    tableContainer.style.display = 'none';
-                    toggleBtn.textContent = 'Show Table';
-                } else {
-                    graphContainer.style.display = 'none';
-                    tableContainer.style.display = 'block';
-                    toggleBtn.textContent = 'Show Graph';
-                }
-            });
+            // Toggle logic
+            if (toggleBtn) {
+                toggleBtn.addEventListener('click', () => {
+                    isGraphView = !isGraphView;
+                    if (isGraphView) {
+                        graphContainer.style.display = 'block';
+                        tableContainer.style.display = 'none';
+                        toggleBtn.textContent = 'Show Table';
+                    } else {
+                        graphContainer.style.display = 'none';
+                        tableContainer.style.display = 'block';
+                        toggleBtn.textContent = 'Show Graph';
+                    }
+                });
+            }
 
             // Carousel logic
             const carousel = document.getElementById('screenshot-carousel');
             if (carousel) {
                 const items = carousel.querySelectorAll('.carousel-item');
-                let currentIndex = 0;
-
-                const showItem = (index) => {
-                    items.forEach((item, i) => {
-                        item.classList.toggle('active', i === index);
+                if (items.length > 0) {
+                    let currentIndex = 0;
+                    const showItem = (index) => {
+                        items.forEach((item, i) => { item.classList.toggle('active', i === index); });
+                    };
+                    document.getElementById('prev-btn').addEventListener('click', () => {
+                        currentIndex = (currentIndex - 1 + items.length) % items.length;
+                        showItem(currentIndex);
                     });
-                };
-
-                document.getElementById('prev-btn').addEventListener('click', () => {
-                    currentIndex = (currentIndex - 1 + items.length) % items.length;
-                    showItem(currentIndex);
-                });
-
-                document.getElementById('next-btn').addEventListener('click', () => {
-                    currentIndex = (currentIndex + 1) % items.length;
-                    showItem(currentIndex);
-                });
+                    document.getElementById('next-btn').addEventListener('click', () => {
+                        currentIndex = (currentIndex + 1) % items.length;
+                        showItem(currentIndex);
+                    });
+                }
             }
         });
     </script>

@@ -35,6 +35,9 @@ type Host struct {
 	Wifi           *WifiInfo                           `json:"wifi,omitempty"`
 	WebResponses   []WebResponse                       `json:"web_responses,omitempty"`
 	Screenshots    []Screenshot                        `json:"screenshots,omitempty"`
+	FTPResults     []FTPResult                         `json:"ftp_results,omitempty"`
+	SSHResults     []SSHResult                         `json:"ssh_results,omitempty"`
+	SMBResults     []SMBResult                         `json:"smb_results,omitempty"`
 }
 
 // NewHost creates an initialized Host.
@@ -50,6 +53,9 @@ func NewHost(mac string) *Host {
 		Wifi:           &WifiInfo{ProbeRequests: make(map[string]bool)},
 		WebResponses:   make([]WebResponse, 0),
 		Screenshots:    make([]Screenshot, 0),
+		FTPResults:     make([]FTPResult, 0),
+		SSHResults:     make([]SSHResult, 0),
+		SMBResults:     make([]SMBResult, 0),
 	}
 }
 
@@ -196,4 +202,39 @@ type Screenshot struct {
 // ImageDataBase64 returns the image data as a base64 encoded string. This is useful for embedding in HTML.
 func (s *Screenshot) ImageDataBase64() string {
 	return base64.StdEncoding.EncodeToString(s.ImageData)
+}
+
+// FTPResult holds the results of an FTP anonymous login attempt.
+type FTPResult struct {
+	ID                     int64
+	PortID                 int
+	Address                string
+	Status                 string
+	Error                  string
+	AnonymousLoginPossible bool
+	CurrentDir             string
+	DirectoryListing       []string
+}
+
+// SSHResult holds the results of an SSH login attempt.
+type SSHResult struct {
+	ID         int64
+	PortID     int
+	Address    string
+	User       string
+	Status     string
+	Error      string
+	Successful bool
+	Output     string
+}
+
+// SMBResult holds the results of an SMB connection attempt.
+type SMBResult struct {
+	ID         int64
+	PortID     int
+	Address    string
+	Status     string
+	Error      string
+	Successful bool
+	Shares     []string
 }
