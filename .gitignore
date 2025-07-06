@@ -20,3 +20,5 @@ oui.txt
 gonetmap.db
 config.yaml
 gonetmap.exe
+.gitignore
+

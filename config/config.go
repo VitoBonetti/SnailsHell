@@ -9,6 +9,11 @@ import (
 
 // Config holds all the configuration for the application.
 type Config struct {
+	Application struct {
+		Name      string `yaml:"name"`
+		Version   string `yaml:"version"`
+		GithubURL string `yaml:"github_url"`
+	} `yaml:"application"`
 	Database struct {
 		Path string `yaml:"path"`
 	} `yaml:"database"`
@@ -56,6 +61,15 @@ func LoadConfig() error {
 // createDefaultConfig creates a default config.yaml file with sensible defaults.
 func createDefaultConfig(path string) error {
 	defaultConfig := Config{
+		Application: struct {
+			Name      string `yaml:"name"`
+			Version   string `yaml:"version"`
+			GithubURL string `yaml:"github_url"`
+		}{
+			Name:      "goNetMap",
+			Version:   "1.0.0",
+			GithubURL: "https://github.com/VitoBonetti/goNetMap",
+		},
 		Database: struct {
 			Path string `yaml:"path"`
 		}{

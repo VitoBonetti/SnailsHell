@@ -3,6 +3,7 @@ package server
 import (
 	"embed"
 	"fmt"
+	"gonetmap/config"
 	"gonetmap/livecapture"
 	"gonetmap/scanner"
 	"gonetmap/storage"
@@ -15,6 +16,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// NEW: Helper function to get base data for all templates
+func getBaseTemplateData() gin.H {
+	return gin.H{
+		"App": config.Cfg.Application,
+	}
+}
 
 // Start accepts the embedded filesystem and starts the web server.
 func Start(embeddedTemplates embed.FS) {
@@ -94,9 +102,10 @@ func handleCampaignList(c *gin.Context) {
 		c.String(http.StatusInternalServerError, "Could not load campaigns.")
 		return
 	}
-	c.HTML(http.StatusOK, "campaign_list.html", gin.H{
-		"Campaigns": campaigns,
-	})
+	data := getBaseTemplateData()
+	data["Campaigns"] = campaigns
+
+	c.HTML(http.StatusOK, "campaign_list.html", data)
 }
 
 func handleComparePage(c *gin.Context) {
@@ -108,11 +117,12 @@ func handleComparePage(c *gin.Context) {
 	baseID, _ := strconv.Atoi(c.DefaultQuery("base", "0"))
 	compareID, _ := strconv.Atoi(c.DefaultQuery("compare", "0"))
 
-	c.HTML(http.StatusOK, "compare.html", gin.H{
-		"Campaigns":         campaigns,
-		"BaseCampaignID":    baseID,
-		"CompareCampaignID": compareID,
-	})
+	data := getBaseTemplateData()
+	data["Campaigns"] = campaigns
+	data["BaseCampaignID"] = baseID
+	data["CompareCampaignID"] = compareID
+
+	c.HTML(http.StatusOK, "compare.html", data)
 }
 
 func handleDashboard(c *gin.Context) {
@@ -132,11 +142,13 @@ func handleDashboard(c *gin.Context) {
 		c.String(http.StatusInternalServerError, "Could not load dashboard summary.")
 		return
 	}
-	c.HTML(http.StatusOK, "dashboard.html", gin.H{
-		"Campaign":     campaign,
-		"AllCampaigns": allCampaigns,
-		"Summary":      summary,
-	})
+
+	data := getBaseTemplateData()
+	data["Campaign"] = campaign
+	data["AllCampaigns"] = allCampaigns
+	data["Summary"] = summary
+
+	c.HTML(http.StatusOK, "dashboard.html", data)
 }
 
 func handleHostDetail(c *gin.Context) {
@@ -147,10 +159,12 @@ func handleHostDetail(c *gin.Context) {
 		c.String(http.StatusNotFound, "Host not found")
 		return
 	}
-	c.HTML(http.StatusOK, "host_detail.html", gin.H{
-		"Host":       host,
-		"CampaignID": campaignID,
-	})
+
+	data := getBaseTemplateData()
+	data["Host"] = host
+	data["CampaignID"] = campaignID
+
+	c.HTML(http.StatusOK, "host_detail.html", data)
 }
 
 func handleHandshakes(c *gin.Context) {
@@ -180,12 +194,14 @@ func handleHandshakes(c *gin.Context) {
 		c.String(http.StatusInternalServerError, "Could not load handshakes.")
 		return
 	}
-	c.HTML(http.StatusOK, "handshakes.html", gin.H{
-		"Campaign":    campaign,
-		"Handshakes":  handshakes,
-		"TotalPages":  totalPages,
-		"CurrentPage": page,
-	})
+
+	data := getBaseTemplateData()
+	data["Campaign"] = campaign
+	data["Handshakes"] = handshakes
+	data["TotalPages"] = totalPages
+	data["CurrentPage"] = page
+
+	c.HTML(http.StatusOK, "handshakes.html", data)
 }
 
 func handleReportDownload(c *gin.Context) {
